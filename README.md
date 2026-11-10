@@ -306,4 +306,5 @@ with or endorsed by DeepSeek.
 
 ## Licence
 
-MIT.
+MIT, see [LICENSE](LICENSE). The DeepSeek Harness notice is in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
