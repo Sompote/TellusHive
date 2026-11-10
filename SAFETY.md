@@ -31,7 +31,8 @@ Harness extension that sends session logs to DeepSeek is deliberately not ported
 
 The agents can be wrong. A recorded test run showed both the designer and the checker treating a
 given support shear as the shear at distance d, which led them to report a load inconsistency
-that did not exist. Every design must be checked by a qualified engineer before use, and clause
+that did not exist. The default team now tells the coordinator, designer and checker to read a
+given Vu as the support reaction unless the engineer says otherwise, but every design must be checked by a qualified engineer before use, and clause
 citations are only as good as the standards imported into the library.
 
 ## Keys
