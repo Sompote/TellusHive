@@ -1,0 +1,11 @@
+[package]
+name = "th-hive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TellusHive's agent harness: a Rust port of the DeepSeek Harness architecture (plugin context, session log, turn/step agent loop, tool pipeline, subagents, compaction)"
+
+[dependencies]
+th-llm = { path = "../llm" }
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "th-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TellusHive on th-hive: the civil-engineering bundle (team, tools, MCP programs, prompt, chat bridge)"
+
+[dependencies]
+th-llm = { path = "../llm" }
+th-hive = { path = "../hive" }
+th-mcp = { path = "../mcp" }
+th-kb = { path = "../kb" }
+th-eng = { path = "../eng" }
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+pdf-extract = "0.10"

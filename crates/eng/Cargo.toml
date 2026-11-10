@@ -1,0 +1,17 @@
+[package]
+name = "th-eng"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deterministic engineering engine: expression evaluator, traceable calc sheets, drawings (SVG/DXF/PNG), verified design modules and PDF/Markdown reports"
+
+[dependencies]
+serde.workspace = true
+# exact f64 round trip, so a Design or Sheet survives JSON unchanged
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+# SVG rasteriser for drawings in reports; 0.45 matches egui_extras 0.31. No system fonts:
+# the bundled Inter / Noto Sans Thai are loaded explicitly.
+resvg = { version = "0.45.1", default-features = false, features = ["text"] }
+# PDF writer, same version as Pondus (known to work with the ported layout engine).
+krilla = "0.8.2"
+ttf-parser = "0.25"

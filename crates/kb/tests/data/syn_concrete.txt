@@ -1,0 +1,118 @@
+SYN-CONC 1: Synthetic Structural Concrete Code (test document)
+This document is written for software testing only. Its wording and numbers are invented
+and must not be used for design.
+
+CONTENTS
+9.1 Scope ............................................ 1
+9.6 Reinforcement limits ............................. 2
+22.5 One-way shear strength .......................... 3
+
+Chapter 9 Beams
+
+9.1 Scope
+9.1.1 This chapter applies to the design of nonprestressed and prestressed beams, including
+composite beams of cast-in-place concrete and precast elements acting together, and beams
+that form part of a moment frame.
+
+9.2 General
+9.2.1 Materials
+9.2.1.1 Design properties for concrete shall be taken from Chapter 19 and design properties for
+steel reinforcement from Chapter 20. Lightweight concrete may be used where the modification
+factor lambda is applied to all strength expressions that contain the square root of f'c.
+
+9.3 Design limits
+9.3.1 Minimum beam depth
+9.3.1.1 For nonprestressed beams that do not support or attach to partitions likely to be
+damaged by large deflections, the overall height h shall not be less than the limits given in
+Table 9.3.1.1, unless the calculated deflection limits of 9.3.2 are satisfied.
+
+Table 9.3.1.1 Minimum depth of nonprestressed beams
+Support condition          Minimum h
+Simply supported           l/16
+One end continuous         l/18.5
+Both ends continuous       l/21
+Cantilever                 l/8
+
+9.3.2 Calculated deflection limits
+9.3.2.1 Immediate and time-dependent deflections shall be calculated with the effective moment
+of inertia and the long-term multiplier for sustained load, and the results shall not exceed
+the permissible values for the supported construction.
+
+9.5 Design strength
+9.5.1.1 For each applicable factored load combination, the design strength at all sections
+shall satisfy phi Sn >= U, including the interaction between flexure and axial force, and the
+strength reduction factor phi shall be determined in accordance with Chapter 21.
+
+9.6 Reinforcement limits
+9.6.1 Minimum flexural reinforcement in nonprestressed beams
+9.6.1.1 A minimum area of flexural reinforcement, As,min, shall be provided at every section
+where tension reinforcement is required by analysis.
+9.6.1.2 As,min shall be the larger of 0.25 sqrt(f'c) bw d / fy and 1.4 bw d / fy, where bw is
+the web width and d the effective depth. For a statically determinate member with a flange in
+tension, bw shall be replaced by the smaller of 2bw and the flange width.
+9.6.1.3 If the area of tension reinforcement provided at every section is at least one-third
+greater than the area required by analysis, 9.6.1.1 and 9.6.1.2 need not be satisfied.
+
+9.6.2 Minimum flexural reinforcement in prestressed beams
+9.6.2.1 For members with bonded prestressed reinforcement, the total quantity of prestressed
+and nonprestressed reinforcement shall be adequate to develop a factored load at least 1.2
+times the cracking load computed from the modulus of rupture.
+
+9.6.3 Minimum shear reinforcement
+9.6.3.1 A minimum area of shear reinforcement, Av,min, shall be provided in all regions where
+the factored shear force Vu exceeds 0.5 phi Vc, except in shallow beams with h not greater than
+250 mm, in beams integral with slabs, and in joist construction.
+9.6.3.2 Where shear reinforcement is required, Av,min/s shall be the larger of
+0.062 sqrt(f'c) bw / fyt and 0.35 bw / fyt, with s the spacing of stirrups along the span.
+
+9.6.4 Minimum torsional reinforcement
+9.6.4.1 Where torsional reinforcement is required, the transverse closed stirrups and the
+longitudinal bars shall each satisfy the minimum quantities of Chapter 22 for torsion, in
+addition to the requirements for shear.
+
+9.7 Reinforcement detailing
+9.7.1 Concrete cover
+9.7.1.1 Specified concrete cover for reinforcement shall be in accordance with Chapter 20, with
+larger cover for members cast against and permanently exposed to earth.
+9.7.2 Development of reinforcement
+9.7.2.1 Development lengths and splice lengths of deformed bars in tension shall be calculated
+in accordance with Chapter 25; at simple supports, positive moment bars shall extend into the
+support so that the anchorage length satisfies the ratio of moment capacity to shear.
+9.7.6 Transverse reinforcement
+9.7.6.2.2 The maximum spacing of the legs of stirrups along the length of the member shall not
+exceed d/2 and 600 mm, and across the width of the member shall not exceed d and 600 mm. Where
+Vs exceeds 0.33 sqrt(f'c) bw d, these maximum spacings shall be halved.
+
+Chapter 22 Sectional strength
+
+22.5 One-way shear strength
+22.5.1 General
+22.5.1.1 The nominal one-way shear strength at a section, Vn, shall be calculated as the sum of
+the contribution of the concrete and of the shear reinforcement:
+    Vn = Vc + Vs                                                   (22.5.1.1)
+22.5.1.2 The cross-sectional dimensions shall be selected so that Vu does not exceed
+phi (Vc + 0.66 sqrt(f'c) bw d), to limit diagonal compression cracking of the web.
+
+22.5.5 Vc for nonprestressed members
+22.5.5.1 For nonprestressed members, the concrete contribution Vc shall be calculated with the
+expression of Table 22.5.5.1, which depends on the longitudinal reinforcement ratio, the size
+effect factor and the axial load, and Vc shall not be taken greater than 0.42 lambda sqrt(f'c) bw d.
+
+Table 22.5.5.1 Vc for nonprestressed members
+Criteria                 Vc
+Av >= Av,min             0.17 lambda sqrt(f'c) bw d + Nu / (6 Ag) bw d
+Av < Av,min              0.66 lambda_s lambda (rho_w)^(1/3) sqrt(f'c) bw d + Nu / (6 Ag) bw d
+
+22.5.5.1.3 The size effect modification factor lambda_s shall be taken as
+sqrt(2 / (1 + 0.004 d)), not greater than 1.0, so that deep members without minimum stirrups
+are assigned a lower unit shear strength.
+
+22.5.8 One-way shear reinforcement
+22.5.8.5.3 Vs for shear reinforcement perpendicular to the longitudinal axis of the member
+shall be calculated by Vs = Av fyt d / s, where s is the stirrup spacing and Av the area of all
+legs within the spacing.
+
+22.6 Two-way shear strength
+22.6.1.1 Two-way shear strength of slabs and footings shall be checked at a critical section
+located d/2 from the face of the column, concentrated load or reaction area, so that punching
+of the column through the slab is prevented.

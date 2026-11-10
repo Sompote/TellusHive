@@ -1,0 +1,14 @@
+[package]
+name = "th-kb"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "Standards library: local hybrid (vector + BM25) search over design-code clauses"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+regex.workspace = true
+dirs.workspace = true
+pdf-extract = "0.10"

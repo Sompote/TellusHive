@@ -1,0 +1,76 @@
+SYN-GEO 1: Synthetic Geotechnical Design Code (test document)
+Invented wording for software testing; not a real standard.
+
+Section 6 Spread foundations
+
+6.1 General
+(1)P The provisions of this section apply to spread foundations, including pads, strips and
+rafts, founded on soil or rock.
+
+6.2 Limit states
+(1)P The following limit states shall be considered: loss of overall stability, bearing
+resistance failure, failure by sliding, combined failure in ground and structure, and excessive
+settlement or differential movement.
+
+6.4 Design considerations
+(1)P The foundation level shall be chosen with regard to a load-bearing stratum, the depth of
+frost penetration, the level of the groundwater table, possible scour and the effect of
+excavation on neighbouring structures.
+
+6.5 Ultimate limit state design
+6.5.1 Overall stability
+(1)P Overall stability shall be checked for foundations on sloping ground, near excavations or
+retaining walls, and near rivers or the sea.
+
+6.5.2 Bearing resistance
+6.5.2.1 General
+(1)P The following inequality shall be satisfied for all ultimate limit states: Vd <= Rd, where
+Vd includes the weight of the foundation and of any backfill above it.
+6.5.2.2 Analytical method
+(1) A recognised analytical method should be used to obtain the design bearing resistance; the
+sample calculation in Annex D may be used.
+(2) For eccentric loads the effective foundation area A' = B' L' shall be used, with B' = B - 2e.
+6.5.2.2(3)P Where a weak layer lies below a stronger stratum within the zone of influence, the
+bearing resistance shall be determined using the strength of the weaker soil.
+
+6.5.3 Sliding resistance
+(1)P Where the loading is not normal to the foundation base, foundations shall be checked
+against failure by sliding on the base, using Hd <= Rd + Rp;d.
+(2) For drained conditions the design shear resistance is Rd = V'd tan(delta_d), and for
+undrained conditions Rd = A' cu;d. The passive earth pressure in front of the footing should
+only be counted if it will not be removed by erosion or excavation.
+
+6.5.4 Loads with large eccentricities
+(1)P Special precautions shall be taken where the eccentricity of loading exceeds one third of
+the width of a rectangular footing or 0.6 times the radius of a circular footing.
+
+6.6 Serviceability limit state design
+6.6.1 General
+(1)P Account shall be taken of both immediate and delayed settlements.
+6.6.2 Settlement
+(1) Settlement calculations should include immediate settlement, consolidation settlement of
+saturated clay, and secondary compression or creep, using the oedometer modulus or the
+compression index of each layer down to the depth where the stress increase falls to 20 % of the
+effective overburden pressure.
+6.6.3 Rotation and differential settlement
+(1) The relative rotation and the angular distortion between adjacent columns should be limited
+to the values that the supported structure can tolerate without damage.
+
+Annex D (informative) Sample analytical method for bearing resistance calculation
+D.1 Symbols used in Annex D
+(1) A' design effective foundation area; b design values of the base inclination factors;
+B' effective width; s shape factors; i load inclination factors; N bearing resistance factors.
+D.3 Undrained conditions
+(1) The design bearing resistance may be calculated from R/A' = (pi + 2) cu bc sc ic + q with the
+dimensionless factors for the inclination of the base, the shape of the foundation (sc = 1 + 0.2
+B'/L' for a rectangle) and the inclination of the load caused by a horizontal load H.
+D.4 Drained conditions
+(1) The design bearing resistance may be calculated from
+R/A' = c' Nc bc sc ic + q' Nq bq sq iq + 0.5 gamma' B' Ngamma bgamma sgamma igamma
+with the design values of the dimensionless factors for the bearing resistance:
+Nq = e^(pi tan phi') tan^2(45 + phi'/2), Nc = (Nq - 1) cot phi', Ngamma = 2 (Nq - 1) tan phi',
+and the shape of the foundation: sq = 1 + (B'/L') sin phi' for a rectangular shape,
+sgamma = 1 - 0.3 (B'/L'), sc = (sq Nq - 1)/(Nq - 1).
+D.5 Plate load test
+(1) The bearing resistance may be estimated from a plate load test when the soil below the plate
+is representative of the soil below the full foundation to the depth of influence.

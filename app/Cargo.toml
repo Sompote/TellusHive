@@ -1,0 +1,24 @@
+[package]
+name = "tellushive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "TellusHive civil-engineering design system: coordinator + specialist agents, standards library, calculations, drawings, reports"
+
+[[bin]]
+name = "tellushive"
+path = "src/main.rs"
+
+[dependencies]
+th-harness = { path = "../crates/harness" }
+th-llm = { path = "../crates/llm" }
+th-mcp = { path = "../crates/mcp" }
+th-kb = { path = "../crates/kb" }
+th-eng = { path = "../crates/eng" }
+eframe = "0.31"
+egui_extras = { version = "0.31", features = ["svg", "image", "file"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rfd = "0.17"
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
