@@ -244,6 +244,21 @@ pub fn default_plugins() -> Vec<ServerConfig> {
     out
 }
 
+/// Built-in agents' roles and instructions of earlier versions: `TeamSpec::load` replaces a
+/// text that is still one of these with the current default, and keeps one the engineer edited.
+pub const OLD_AGENT_TEXTS: &[(&str, &str, &str)] = &[
+    ("coordinator", "instructions", "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, state the assumption you made and flag it clearly. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round."),
+    ("bim_modeller", "role", "Builds the BIM model in Aedifex (levels, grids, walls, slabs, beams, columns, footings, rebar) from the design, and exports IFC and drawings; can show drawings in CADCraft."),
+    ("bim_modeller", "instructions", "You are a BIM modeller. Build the building model in Aedifex from the agreed design: levels and grids first, then structure (footings, columns, beams, slabs, walls) with the sizes and reinforcement from the calculations, then export IFC4 and the drawings the engineer asks for. Use the Pondus export when the structure was designed in Pondus. Check the model against the design (sizes, levels, bar marks) before you report, and list anything you had to assume."),
+    ("bim_modeller", "instructions", "You are a BIM modeller. Model only a building or structure that the task describes with its design: if the task has none (for example a slope or other soil-only analysis), do not invent one, and reply that there is nothing to model. Build the building model in Aedifex from the agreed design: levels and grids first, then structure (footings, columns, beams, slabs, walls) with the sizes and reinforcement from the calculations, then export IFC4 and the drawings the engineer asks for. Use the Pondus export when the structure was designed in Pondus. Check the model against the design (sizes, levels, bar marks) before you report, and list anything you had to assume."),
+];
+
+/// Built-in plugin descriptions of earlier versions, which `Settings::load` replaces with the
+/// current one (a description the engineer wrote is left alone).
+pub const OLD_PLUGIN_DESCRIPTIONS: &[(&str, &str)] = &[
+    ("aedifex", "Aedifex BIM modeller (Revit-like): levels, grids, walls, slabs, beams, columns, footings, rebar, rooms, sheets; builds the building model from a structural design (Pondus), imports Revit .rvt, exports IFC4 and drawings."),
+];
+
 impl Settings {
     pub fn path() -> PathBuf {
         data_dir().join("settings.json")
@@ -263,6 +278,11 @@ impl Settings {
                     if !std::path::Path::new(&q.command).is_file() && std::path::Path::new(&p.command).is_file() {
                         q.command = p.command;
                         q.enabled = true;
+                    }
+                    // a description still as an earlier version wrote it follows the program's
+                    // new abilities; one the engineer edited is kept
+                    if OLD_PLUGIN_DESCRIPTIONS.iter().any(|(n, d)| *n == p.name && *d == q.description) {
+                        q.description = p.description;
                     }
                 }
                 None => s.plugins.push(p),
@@ -509,6 +529,17 @@ impl TeamSpec {
         // the built-in team gains the specialists added in later versions
         let d = default_team();
         if t.name == d.name {
+            // texts still as an earlier version wrote them follow the current defaults
+            for a in t.agents.iter_mut() {
+                let Some(da) = d.agents.iter().find(|x| x.id == a.id) else { continue };
+                let old = |field: &str, text: &str| OLD_AGENT_TEXTS.iter().any(|(id, f, o)| *id == a.id && *f == field && *o == text);
+                if old("role", &a.role) {
+                    a.role = da.role.clone();
+                }
+                if old("instructions", &a.instructions) {
+                    a.instructions = da.instructions.clone();
+                }
+            }
             let mut added = false;
             for a in &d.agents {
                 if !t.agents.iter().any(|b| b.id == a.id) {
