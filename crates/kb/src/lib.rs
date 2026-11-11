@@ -33,6 +33,7 @@ use embed::{HashedIdf, StoredEmbedder};
 use store::{Bm25, Chunk};
 
 pub use chunk::{clause_key, detect_heading};
+pub use embed::set_openrouter_key;
 
 /// A standard in the library.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +82,25 @@ pub enum EmbedderConfig {
     Hashed { dim: usize },
     /// OpenAI-compatible `POST {base_url}/embeddings`.
     Api { base_url: String, api_key: Option<String>, model: String },
+}
+
+/// OpenRouter's embeddings endpoint and the default model there: multilingual (Thai
+/// included), 1024 dimensions, 8k-token inputs.
+pub const OPENROUTER_EMBED_URL: &str = "https://openrouter.ai/api/v1";
+pub const OPENROUTER_EMBED_MODEL: &str = "baai/bge-m3";
+
+impl EmbedderConfig {
+    /// Embedding through OpenRouter with `model`; the key comes from [`set_openrouter_key`].
+    pub fn openrouter(model: &str) -> EmbedderConfig {
+        EmbedderConfig::Api { base_url: OPENROUTER_EMBED_URL.into(), api_key: None, model: model.into() }
+    }
+    pub fn is_openrouter(&self) -> bool {
+        matches!(self, EmbedderConfig::Api { base_url, .. } if base_url.contains("openrouter.ai"))
+    }
+    /// The signature stored with a standard built with this embedder (`StandardMeta::embedder`).
+    pub fn signature(&self) -> String {
+        embed::signature(self)
+    }
 }
 
 impl Default for EmbedderConfig {
@@ -363,6 +383,18 @@ impl Library {
         self.invalidate(&meta.id);
         progress(1.0, &format!("{} ready: {} chunks", meta.code, meta.chunks));
         Ok(meta)
+    }
+
+    /// Embed an existing standard again with `embedder` (after the embedding setting changed),
+    /// keeping its chunks and notes; no file is read again.
+    pub fn reindex(&self, standard_id: &str, embedder: &EmbedderConfig, progress: &mut dyn FnMut(f32, &str)) -> Result<StandardMeta, String> {
+        let _w = self.write.lock().map_err(|_| "library write lock poisoned")?;
+        let e = self.load(standard_id)?;
+        let items: Vec<(Chunk, Option<Vec<f32>>)> = e.chunks.iter().map(|c| (c.clone(), None)).collect();
+        let mut meta = e.meta.clone();
+        meta.embedder = embed::signature(embedder);
+        drop(e);
+        self.write_standard(&meta, embedder, items, progress)
     }
 
     /// Add a user-written rule or office practice to a standard. It is
@@ -699,6 +731,35 @@ mod tests {
         assert!(r.contains(&("".into(), "6.5.2.2(1)p".into())));
         assert!(query_clause_refs("minimum shear reinforcement area").is_empty());
         assert_eq!(query_clause_refs("ข้อ 3.2"), vec![("".to_string(), "3.2".to_string())]);
+    }
+    /// Re-indexing keeps the chunks and notes and changes how they are embedded; the
+    /// OpenRouter embedder without a key stops with a message that says where the key goes.
+    #[test]
+    fn reindex_and_openrouter_key() {
+        let root = std::env::temp_dir().join(format!("th_kb_reindex_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let lib = Library::open(&root).unwrap();
+        let f = root.join("std.md");
+        std::fs::write(&f, "# 3.2 Uplift\nThe structure shall resist uplift by buoyancy with a factor of safety of 1.1.\n\n# 3.3 Sliding\nCheck sliding at the base.\n").unwrap();
+        let meta = NewStandard { code: "TEST 1".into(), name: "Test".into(), ..Default::default() };
+        let m = lib.ingest(&[f], &meta, &EmbedderConfig::Hashed { dim: 256 }, &mut |_, _| {}).unwrap();
+        lib.add_note(&m.id, "3.2", "Office", "Use 1.2 for basements.").unwrap();
+        let before = lib.chunks(&m.id).len();
+        let m2 = lib.reindex(&m.id, &EmbedderConfig::Hashed { dim: 512 }, &mut |_, _| {}).unwrap();
+        assert_eq!(m2.embedder, EmbedderConfig::Hashed { dim: 512 }.signature());
+        assert_eq!(lib.chunks(&m.id).len(), before, "chunks and notes kept");
+        assert!(lib.search("uplift buoyancy", &[m.id.clone()], 3).unwrap().iter().any(|h| h.clause == "3.2"));
+
+        set_openrouter_key(None);
+        if std::env::var("TH_KB_EMBED_API_KEY").is_err() {
+            let e = lib.reindex(&m.id, &EmbedderConfig::openrouter(OPENROUTER_EMBED_MODEL), &mut |_, _| {}).unwrap_err();
+            assert!(e.contains("OpenRouter key"), "{e}");
+            // the failed attempt left the standard as it was
+            assert_eq!(lib.list().iter().find(|x| x.id == m.id).unwrap().embedder, m2.embedder);
+        }
+        assert!(EmbedderConfig::openrouter("baai/bge-m3").is_openrouter());
+        assert!(!EmbedderConfig::Api { base_url: "http://localhost:11434/v1".into(), api_key: None, model: "m".into() }.is_openrouter());
+        let _ = std::fs::remove_dir_all(&root);
     }
     #[test]
     fn library_is_send_sync() {

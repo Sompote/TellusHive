@@ -16,6 +16,8 @@ use crate::theme::medium_font;
 enum ImportMsg {
     Progress(f32, String),
     Done(Result<StandardMeta, String>),
+    /// Re-indexing finished: how many standards, or the first error.
+    Reindexed(Result<usize, String>),
 }
 
 pub struct StandardsView {
@@ -89,6 +91,14 @@ impl StandardsView {
                         self.files.clear();
                         self.stale = true;
                     }
+                    ImportMsg::Reindexed(r) => {
+                        self.status = match r {
+                            Ok(n) => format!("Re-indexed {n} standard(s) with the current embedding setting."),
+                            Err(e) => format!("Re-indexing failed: {e}"),
+                        };
+                        self.import_rx = None;
+                        self.stale = true;
+                    }
                 }
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
@@ -136,6 +146,41 @@ impl StandardsView {
                 self.stale = true;
             }
         });
+        // standards indexed with another method than the current setting
+        let want = embedder.signature();
+        let other: Vec<String> = self.list.iter().filter(|m| m.embedder != want).map(|m| m.id.clone()).collect();
+        if !other.is_empty() {
+            let how = if embedder.is_openrouter() { "the OpenRouter embedding model" } else { "the simple built-in method" };
+            chrome::hint(ui, &format!("{} standard(s) were indexed another way than the current setting ({how}). Re-index them so that search uses it.", other.len()));
+            ui.horizontal(|ui| {
+                if ui.add_enabled(self.import_rx.is_none(), chrome::primary_button("Re-index")).clicked() {
+                    let (tx, rx) = mpsc::channel();
+                    self.import_rx = Some(rx);
+                    let (lib, emb, ctx) = (lib.clone(), embedder.clone(), ui.ctx().clone());
+                    std::thread::spawn(move || {
+                        let n = other.len();
+                        for (k, id) in other.iter().enumerate() {
+                            let tx2 = tx.clone();
+                            let c2 = ctx.clone();
+                            let mut progress = |f: f32, s: &str| {
+                                let _ = tx2.send(ImportMsg::Progress((k as f32 + f) / n as f32, format!("{id}: {s}")));
+                                c2.request_repaint();
+                            };
+                            if let Err(e) = lib.reindex(id, &emb, &mut progress) {
+                                let _ = tx.send(ImportMsg::Reindexed(Err(format!("{id}: {e}"))));
+                                ctx.request_repaint();
+                                return;
+                            }
+                        }
+                        let _ = tx.send(ImportMsg::Reindexed(Ok(n)));
+                        ctx.request_repaint();
+                    });
+                }
+            });
+        }
+        if self.import_rx.is_some() && !self.show_import {
+            ui.add(egui::ProgressBar::new(self.progress.0).text(&self.progress.1));
+        }
         if !self.show_import && chrome::ghost_button(ui, "+ Import a standard").clicked() {
             self.show_import = true;
         }
@@ -172,7 +217,8 @@ impl StandardsView {
                     ui.label(RichText::new(f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).size(11.5).color(t.text_faint));
                 }
                 let embed_label = match embedder {
-                    EmbedderConfig::Hashed { .. } => "built-in lexical vectors (offline)".to_string(),
+                    EmbedderConfig::Hashed { .. } => "the simple built-in method (offline)".to_string(),
+                    EmbedderConfig::Api { base_url, model, .. } if base_url.contains("openrouter.ai") => format!("{model} through OpenRouter"),
                     EmbedderConfig::Api { model, .. } => format!("the embedding model {model}"),
                 };
                 chrome::hint(ui, &format!("Indexed with {embed_label}; change it in Settings."));

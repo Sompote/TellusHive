@@ -204,6 +204,16 @@ pub fn embeddings_url(base_url: &str) -> String {
     }
 }
 
+/// The OpenRouter key, set by the app from its OpenRouter provider so that it is never written
+/// into a standard's files. It is sent only to openrouter.ai.
+static OPENROUTER_KEY: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub fn set_openrouter_key(key: Option<String>) {
+    if let Ok(mut k) = OPENROUTER_KEY.write() {
+        *k = key.filter(|s| !s.trim().is_empty());
+    }
+}
+
 /// Embed `inputs` through an OpenAI-compatible endpoint, `API_BATCH` per call.
 pub fn api_embed(
     base_url: &str,
@@ -220,7 +230,11 @@ pub fn api_embed(
     let key = api_key
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
+        .or_else(|| if url.contains("openrouter.ai") { OPENROUTER_KEY.read().ok().and_then(|k| k.clone()) } else { None })
         .or_else(|| std::env::var("TH_KB_EMBED_API_KEY").ok().filter(|s| !s.is_empty()));
+    if key.is_none() && url.contains("openrouter.ai") {
+        return Err("no OpenRouter key: add it under Settings > Providers > OpenRouter".into());
+    }
     let mut out = Vec::with_capacity(inputs.len());
     for batch in inputs.chunks(API_BATCH) {
         // very long inputs overflow small embedding contexts (e.g. 2k tokens)

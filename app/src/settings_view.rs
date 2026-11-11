@@ -213,26 +213,33 @@ impl SettingsView {
 }
 
 fn embed_ui(ui: &mut egui::Ui, s: &mut Settings) {
-    group(ui, "Embedding", "used for standards imported from now on", |ui| {
-        let api = matches!(s.embedder, EmbedderConfig::Api { .. });
-        if ui.radio(!api, "Built-in: offline lexical vectors").clicked() && api {
+    group(ui, "Embedding", "how the standards library is searched", |ui| {
+        let simple = matches!(s.embedder, EmbedderConfig::Hashed { .. });
+        let openrouter = s.embedder.is_openrouter();
+        if ui.radio(simple, "Simple: built-in, offline").clicked() && !simple {
             s.embedder = EmbedderConfig::Hashed { dim: 1024 };
         }
-        if ui.radio(api, "An embedding model (OpenAI-compatible API, e.g. Ollama)").clicked() && !api {
-            s.embedder = EmbedderConfig::Api { base_url: "http://localhost:11434/v1".into(), api_key: None, model: "nomic-embed-text".into() };
+        if ui.radio(openrouter, "Embedding model through OpenRouter").clicked() && !openrouter {
+            s.embedder = EmbedderConfig::openrouter(th_kb::OPENROUTER_EMBED_MODEL);
         }
         ui.add_space(6.0);
-        if let EmbedderConfig::Api { base_url, api_key, model } = &mut s.embedder {
-            chrome::field(ui, "Base URL", base_url);
-            chrome::field(ui, "Model", model);
-            let mut k = api_key.clone().unwrap_or_default();
-            if chrome::password(ui, "API key", &mut k).changed() {
-                *api_key = if k.trim().is_empty() { None } else { Some(k) };
+        match &mut s.embedder {
+            EmbedderConfig::Hashed { .. } => {
+                chrome::hint(ui, "Matches words, word pieces and clause numbers (feature-hashed n-grams with IDF, fused with BM25 keyword search). Free and offline, and good when the query names the clause or the exact term, but it does not understand meaning: 'uplift' does not find 'buoyancy'.");
             }
-            chrome::hint(ui, "Ollama: run `ollama pull nomic-embed-text`, base URL http://localhost:11434/v1. Each standard keeps the embedder it was built with.");
-        } else {
-            chrome::hint(ui, "Feature-hashed word and character n-grams with IDF, fused with BM25 keyword search. Works offline and finds clause numbers and technical terms well; it does not understand paraphrases the way a neural embedding does.");
+            EmbedderConfig::Api { base_url, model, .. } if base_url.contains("openrouter.ai") => {
+                chrome::field(ui, "Model", model).on_hover_text("An embedding model on OpenRouter, e.g. baai/bge-m3, qwen/qwen3-embedding-8b, openai/text-embedding-3-large");
+                let key = s.providers.iter().find(|p| p.name == "openrouter").and_then(|p| p.key()).is_some();
+                if !key {
+                    ui.label(egui::RichText::new("No OpenRouter key yet: add it under Providers.").size(12.0).color(chrome::tokens(ui).error));
+                }
+                chrome::hint(ui, "Semantic search: finds a clause by meaning as well as by its words, in Thai and English. baai/bge-m3 is multilingual and costs about USD 0.01 per million tokens, a fraction of a cent for a whole standard. Uses the OpenRouter key from Providers, and the standard's text is sent to OpenRouter to be embedded.");
+            }
+            EmbedderConfig::Api { base_url, model, .. } => {
+                chrome::hint(ui, &format!("Currently a custom embedding API ({model} at {base_url}). Choose one of the two options above to replace it."));
+            }
         }
+        chrome::hint(ui, "Standards imported from now on use this setting. To change those already in the library, use Re-index on the Standards page.");
     });
 }
 

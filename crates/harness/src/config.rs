@@ -294,10 +294,17 @@ impl Settings {
                 None => s.plugins.push(p),
             }
         }
+        s.share_openrouter_key();
         s
     }
     pub fn save(&self) -> Result<(), String> {
+        self.share_openrouter_key();
         write_json(&Self::path(), self, true)
+    }
+    /// The standards library embeds through OpenRouter with the OpenRouter provider's key,
+    /// which it keeps in memory rather than in each standard's files.
+    pub fn share_openrouter_key(&self) {
+        th_kb::set_openrouter_key(self.providers.iter().find(|p| p.name == "openrouter").and_then(|p| p.key()));
     }
     pub fn provider(&self, name: &str) -> Option<&Provider> {
         let name = if name.is_empty() { &self.default_provider } else { name };
