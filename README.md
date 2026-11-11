@@ -32,6 +32,19 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
+### What is new in 0.1.2
+
+The team now keeps to the work the engineer asks for, so a slope, excavation or embankment
+analysis goes to the geotechnical analyst alone and no longer starts the BIM modeller or the
+structural analyst, while any further deliverable is offered in the answer instead of being made
+unasked. When the engineer does ask for a model of the ground, the BIM modeller builds it as
+terrain in Aedifex rather than inventing a building, either as a graded cut or fill slope (the
+cross-section with its berms swept along an alignment) or as a surface from survey points or
+contours, which needs an Aedifex build with terrain support. A team saved under 0.1.0 keeps its
+old Coordinator and BIM modeller instructions, although the scope rule in the shared team prompt
+applies to every team, so choose **Reset to the default design office** in step **3 Team** to
+pick up the new wording.
+
 ## How to use
 
 1. **Add a model.** Open **Settings** (the gear at the top right) and paste an API key for
@@ -45,12 +58,14 @@ computer, so please report what you find.
    to set its model, its **Thinking** (off for drafting and BIM, high for checking), its tools
    and its plugins. The arrows show who may delegate to whom.
 5. **Connect programs (optional).** Step **4 Plugins** lists the MCP programs found on your
-   computer, such as Tellus, Tellus3D, Pondus, Aedifex and CADCraft.
+   computer, such as Tellus, Tellus3D, Pondus, Aedifex (buildings and terrain) and CADCraft.
 6. **Ask for a design.** In the **Design office**, write the request with all the data (geometry,
-   loads, materials, soil, standard, deliverables) and press Send. The panel on the left shows
-   which agents are working and what they are doing.
+   loads, materials, soil, standard, deliverables) and press Send. Name every deliverable you
+   want, such as drawings, a report or a BIM model, because the coordinator gives work only to
+   the specialists the request needs. The panel on the left shows which agents are working and
+   what they are doing.
 7. **Read the results.** Calculation sheets with PASS/FAIL, drawings (SVG and DXF), the PDF report
-   and, when Aedifex was used, the BIM model in 3D appear beside the chat and in **Output**. Every
+   and, when Aedifex was used, the BIM model or terrain in 3D appear beside the chat and in **Output**. Every
    number traces back to its calculation sheet, and the agents' full logs are in the project's
    `sessions/` folder.
 
@@ -98,7 +113,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 80 tests, no API key needed
+cargo test --workspace     # 84 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
