@@ -34,8 +34,13 @@ pub fn find_program(name: &str, configured: &str) -> Option<PathBuf> {
         return p.exists().then_some(p);
     }
     let home = dirs::home_dir().unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = std::env::var("PATH").unwrap_or_default().split(':').map(PathBuf::from).collect();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
     dirs.extend([home.join(".local/bin"), home.join(".npm-global/bin"), home.join(".cargo/bin"), PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
+    #[cfg(windows)]
+    if let Some(app) = dirs::data_dir() {
+        // npm installs claude.cmd / codex.cmd here
+        dirs.push(app.join("npm"));
+    }
     // nvm installs node tools per version
     if let Ok(rd) = std::fs::read_dir(home.join(".nvm/versions/node")) {
         let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path().join("bin")).collect();
@@ -43,18 +48,18 @@ pub fn find_program(name: &str, configured: &str) -> Option<PathBuf> {
         v.reverse();
         dirs.extend(v);
     }
-    dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), format!("{name}.cmd"), name.to_string()] } else { vec![name.to_string()] };
+    dirs.into_iter().flat_map(|d| names.iter().map(move |n| d.join(n)).collect::<Vec<_>>()).find(|p| p.is_file())
 }
 
 /// PATH for the child: the program's own folder first (node for claude), then the usual ones.
-fn child_path(prog: &Path) -> String {
-    let mut parts = vec![];
-    if let Some(d) = prog.parent() {
-        parts.push(d.display().to_string());
+fn child_path(prog: &Path) -> std::ffi::OsString {
+    let mut parts: Vec<PathBuf> = prog.parent().map(|d| vec![d.to_path_buf()]).unwrap_or_default();
+    parts.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    if cfg!(unix) {
+        parts.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
     }
-    parts.push(std::env::var("PATH").unwrap_or_default());
-    parts.push("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin".into());
-    parts.join(":")
+    std::env::join_paths(parts).unwrap_or_default()
 }
 
 pub struct RunOutput {

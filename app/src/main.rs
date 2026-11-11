@@ -1,3 +1,5 @@
+// on Windows the window opens without a console; `run` and `plugins` attach to the terminal
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! TellusHive: an AI design team for civil engineers.
 //!
 //! ```text
@@ -28,6 +30,13 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    #[cfg(windows)]
+    if matches!(args.get(1).map(String::as_str), Some("run" | "plugins" | "--help" | "-h")) {
+        // SAFETY: plain Win32 call with a constant argument
+        unsafe {
+            windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
+        }
+    }
     // the folders of the earlier name (AgenticDesign) move to TellusHive once
     for line in th_harness::config::migrate_legacy() {
         eprintln!("tellushive: {line}");

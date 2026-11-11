@@ -3,3 +3,4 @@
 .DS_Store
 /scratch
 /brand/log_*.txt
+/dist
