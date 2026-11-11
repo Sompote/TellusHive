@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.4 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.4):
+Version 0.1.5 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.5):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.4-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.4/TellusHive-0.1.4-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.4-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.4/TellusHive-0.1.4-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.5-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.5/TellusHive-0.1.5-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.5-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.5/TellusHive-0.1.5-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,17 +32,24 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.4
+### What is new in 0.1.5
 
-The geotechnical analyst now runs TellusLEM for slope stability by limit equilibrium, so a slope,
-cut or embankment gets its factor of safety by Morgenstern-Price with Bishop and Spencer as
-cross-checks and a full search of circular and non-circular slip surfaces, while Tellus confirms
-a critical slope by phi-c reduction and gives the deformations. TellusHive finds TellusLEM in
-Applications, in its build folder or in its packaged app. Drawings also read better in CAD,
-because dimension text now takes the height of the labels beside it instead of about twice that,
-and the DXF text styles use Arial (and Tahoma for Thai) rather than the txt.shx shape font, which
-CADCraft had to replace on every open. **Stop** now stops at once, including a program
-calculation or a script that is running, instead of waiting for it to finish.
+Standards search has two settings under **Settings › Standards search**: **Simple**, the built-in
+offline search by words and clause numbers, and an **embedding model through OpenRouter**
+(baai/bge-m3 by default, multilingual and about USD 0.01 per million tokens), which also finds a
+clause by its meaning and uses the OpenRouter key from Providers. The Standards page shows how
+each standard is searched and re-indexes those built the other way. Thai standards from PDFs set
+in Windows fonts no longer show boxes for the tone marks, and Thai searches now match them,
+because those legacy characters are mapped to the real marks, and standards indexed before are
+repaired once when the app starts. **Settings › Skills** lists every skill and adds one from a
+skill folder or a .skill or .zip file, writes a new one, or removes one from TellusHive's own
+folder. Chat tables and the output panel no longer draw text over text.
+
+From 0.1.4, the geotechnical analyst runs TellusLEM for slope stability by limit equilibrium
+(Morgenstern-Price, with Bishop and Spencer as cross-checks), while Tellus confirms a critical
+slope by phi-c reduction and gives the deformations. Drawings use dimension text at the labels'
+size and Arial (Tahoma for Thai) instead of the txt.shx shape font, and **Stop** stops at once,
+including a program calculation or a script that is running.
 
 The team keeps to the work the engineer asks for, so a slope, excavation or embankment analysis
 does not start the BIM modeller or the structural analyst unless a model is asked for. When it
@@ -121,7 +128,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 86 tests, no API key needed
+cargo test --workspace     # 89 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
