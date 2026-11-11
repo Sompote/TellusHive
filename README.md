@@ -62,7 +62,8 @@ Coordinator or the BIM modeller yourself, choose **Reset to the default design o
    to set its model, its **Thinking** (off for drafting and BIM, high for checking), its tools
    and its plugins. The arrows show who may delegate to whom.
 5. **Connect programs (optional).** Step **4 Plugins** lists the MCP programs found on your
-   computer, such as Tellus, Tellus3D, Pondus, Aedifex (buildings and terrain) and CADCraft.
+   computer, such as TellusLEM (slope stability), Tellus, Tellus3D, Pondus, Aedifex (buildings and
+   terrain) and CADCraft.
 6. **Ask for a design.** In the **Design office**, write the request with all the data (geometry,
    loads, materials, soil, standard, deliverables) and press Send. Name every deliverable you
    want, such as drawings, a report or a BIM model, because the coordinator gives work only to

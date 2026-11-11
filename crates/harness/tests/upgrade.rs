@@ -19,6 +19,13 @@ fn old_defaults_are_refreshed_and_edits_kept() {
     let bim = saved.agents.iter_mut().find(|a| a.id == "bim_modeller").unwrap();
     bim.instructions = old_bim.to_string();
     bim.role = old_role.to_string();
+    // the geotechnical analyst as 0.1.3 saved it: no TellusLEM; the structural analyst with
+    // a plugin list the engineer changed
+    let geo = saved.agents.iter_mut().find(|a| a.id == "geo_analyst").unwrap();
+    geo.plugins = vec!["tellus".into(), "tellus3d".into(), "motus".into()];
+    geo.instructions = OLD_AGENT_TEXTS.iter().find(|(id, f, _)| *id == "geo_analyst" && *f == "instructions").unwrap().2.to_string();
+    let st = saved.agents.iter_mut().find(|a| a.id == "struct_analyst").unwrap();
+    st.plugins = vec!["pondus".into()];
     // the coordinator with a sentence the engineer added
     let coord = saved.agents.iter_mut().find(|a| a.id == "coordinator").unwrap();
     coord.instructions.push_str(" First start with the BIM model.");
@@ -32,6 +39,9 @@ fn old_defaults_are_refreshed_and_edits_kept() {
     assert_eq!(get("bim_modeller").role, want("bim_modeller").role);
     assert!(get("bim_modeller").instructions.contains("add_graded_slope"));
     assert_eq!(get("coordinator").instructions, edited, "an edited text is kept");
+    assert!(get("geo_analyst").plugins.iter().any(|p| p == "telluslem"));
+    assert!(get("geo_analyst").instructions.contains("TellusLEM"));
+    assert_eq!(get("struct_analyst").plugins, vec!["pondus".to_string()], "a changed plugin list is kept");
 
     // settings: the old Aedifex description follows the program, an edited one stays
     let old_desc = OLD_PLUGIN_DESCRIPTIONS.iter().find(|(n, _)| *n == "aedifex").unwrap().1;

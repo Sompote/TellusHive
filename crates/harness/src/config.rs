@@ -211,6 +211,8 @@ pub fn default_plugins() -> Vec<ServerConfig> {
             vec!["/Applications/ContinuaX.app/Contents/MacOS/continuax".into(), h("ENV3/GenFEM/target/release/continuax")], 3600),
         ("motus", "Motus 1-D seismic site response: equivalent-linear and nonlinear analysis of a soil column, ground motions, design spectra, liquefaction triggering, Newmark displacement.",
             vec!["/Applications/Motus.app/Contents/MacOS/motus".into(), h("ENV3/site_reponse/target/release/motus")], 1800),
+        ("telluslem", "TellusLEM limit equilibrium slope stability (SLOPE/W-type, method of columns): Morgenstern-Price, Spencer, Bishop, Janbu, Sarma and others; circular, entry-exit, block and specified slip surfaces with optimisation; Mohr-Coulomb, undrained, SHANSEP, Hoek-Brown and anisotropic strength; piezometric lines, surcharges, anchors, nails, geosynthetics and piles; pseudo-static seismic, rapid drawdown, Newmark displacement, probabilistic and sensitivity analysis; 3D terrain cut into sections; PDF report.",
+            vec!["/Applications/TellusLEM.app/Contents/MacOS/tellus-lem".into(), h("ENV3/slope/TellusLEM/target/release/tellus-lem"), h("ENV3/slope/TellusLEM/dist/TellusLEM.app/Contents/MacOS/tellus-lem")], 1800),
     ];
     let mut out = vec![];
     for (name, desc, paths, timeout_s) in programs {
@@ -244,9 +246,13 @@ pub fn default_plugins() -> Vec<ServerConfig> {
     out
 }
 
-/// Built-in agents' roles and instructions of earlier versions: `TeamSpec::load` replaces a
-/// text that is still one of these with the current default, and keeps one the engineer edited.
+/// Built-in agents' roles, instructions and plugin lists (comma-joined) of earlier versions:
+/// `TeamSpec::load` replaces one that is still as listed here with the current default, and
+/// keeps one the engineer changed.
 pub const OLD_AGENT_TEXTS: &[(&str, &str, &str)] = &[
+    ("geo_analyst", "role", "Runs geotechnical finite element and site response analyses in Tellus (2D), Tellus3D and Motus: excavations, embankments, slopes, foundations, tunnels, consolidation, seismic site response."),
+    ("geo_analyst", "instructions", "You are a geotechnical numerical analyst. Build the model in the program that fits: Tellus for plane-strain problems, Tellus3D when the geometry is truly 3D, Motus for 1-D site response. Keep the model boundaries far enough (at least 3 times the slope height, excavation depth or embankment width), choose the soil model and parameters from the data you are given and state each parameter's source, use staged construction as built, and check convergence. Report the governing results (displacements, forces in structures, safety factor, peak accelerations) with the pictures the program makes, and say what the model cannot capture."),
+    ("geo_analyst", "plugins", "tellus,tellus3d,motus"),
     ("coordinator", "instructions", "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, state the assumption you made and flag it clearly. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round."),
     ("bim_modeller", "role", "Builds the BIM model in Aedifex (levels, grids, walls, slabs, beams, columns, footings, rebar) from the design, and exports IFC and drawings; can show drawings in CADCraft."),
     ("bim_modeller", "instructions", "You are a BIM modeller. Build the building model in Aedifex from the agreed design: levels and grids first, then structure (footings, columns, beams, slabs, walls) with the sizes and reinforcement from the calculations, then export IFC4 and the drawings the engineer asks for. Use the Pondus export when the structure was designed in Pondus. Check the model against the design (sizes, levels, bar marks) before you report, and list anything you had to assume."),
@@ -448,11 +454,11 @@ pub fn default_team() -> TeamSpec {
     let geo = AgentSpec {
         id: "geo_analyst".into(),
         name: "Geotechnical analyst".into(),
-        role: "Runs geotechnical finite element and site response analyses in Tellus (2D), Tellus3D and Motus: excavations, embankments, slopes, foundations, tunnels, consolidation, seismic site response.".into(),
-        instructions: "You are a geotechnical numerical analyst. Build the model in the program that fits: Tellus for plane-strain problems, Tellus3D when the geometry is truly 3D, Motus for 1-D site response. Keep the model boundaries far enough (at least 3 times the slope height, excavation depth or embankment width), choose the soil model and parameters from the data you are given and state each parameter's source, use staged construction as built, and check convergence. Report the governing results (displacements, forces in structures, safety factor, peak accelerations) with the pictures the program makes, and say what the model cannot capture.".into(),
+        role: "Runs slope stability by limit equilibrium in TellusLEM, and geotechnical finite element and site response analyses in Tellus (2D), Tellus3D and Motus: slopes, excavations, embankments, foundations, tunnels, consolidation, seismic site response.".into(),
+        instructions: "You are a geotechnical numerical analyst. Build the model in the program that fits: TellusLEM for the factor of safety of a slope, cut, embankment or retained slope by limit equilibrium (Morgenstern-Price by default, with Bishop and Spencer as cross-checks; a full search of circular and non-circular slip surfaces; reinforcement, seismic coefficients and rapid drawdown where they apply; a 3D terrain cut into sections when the engineer gives a surface), Tellus for plane-strain deformation and staged construction and to confirm a critical slope by phi-c reduction, Tellus3D when the geometry is truly 3D, Motus for 1-D site response. Keep the model boundaries far enough (at least 3 times the slope height, excavation depth or embankment width), choose the soil model and parameters from the data you are given and state each parameter's source, use staged construction as built, and check convergence. Report the governing results (factor of safety with its method and critical slip surface, displacements, forces in structures, peak accelerations) with the pictures the program makes, and say what the model cannot capture.".into(),
         tools: analyst_tools.clone(),
         skills: s(&["*"]),
-        plugins: s(&["tellus", "tellus3d", "motus"]),
+        plugins: s(&["telluslem", "tellus", "tellus3d", "motus"]),
         color: "#a87a1e".into(),
         pos: [420.0, 380.0],
         max_turns: 60,
@@ -538,6 +544,9 @@ impl TeamSpec {
                 }
                 if old("instructions", &a.instructions) {
                     a.instructions = da.instructions.clone();
+                }
+                if old("plugins", &a.plugins.join(",")) {
+                    a.plugins = da.plugins.clone();
                 }
             }
             let mut added = false;
