@@ -21,6 +21,19 @@ agent harness see [architecture.md](architecture.md).
 - **Settings** holds the providers and keys, the default and vision models, the embedding
   model, Claude Code and Codex, the skill folders, the projects folder and the theme.
 
+## The BIM model in 3D
+
+When the agents work in Aedifex, TellusHive keeps a 3D view of the model in the output panel.
+After every Aedifex tool that changes the model, the harness asks Aedifex for the model as a
+triangle mesh (its `export_mesh` tool) and writes it next to the model as
+`models/aedifex.axmesh`. The first change in a task opens the view beside the chat, and the view
+refreshes as the model changes. Drag to rotate, right-drag or Shift-drag to pan, scroll or pinch
+to zoom, double-click to fit the model, and click an element to highlight it and read its id. The
+view is drawn with a depth buffer and outlines where elements meet, and **Open in Aedifex** opens
+the model file in the Aedifex window. In the **Models** list, **3D view** shows it again, or makes
+it from the model file for a project whose model was saved before the view existed. The view
+needs an Aedifex build with `export_mesh`; an older Aedifex simply leaves it out.
+
 ## Claude Code or Codex as an agent's model
 
 Any agent can use Claude Code or Codex as its model instead of a model API: choose the provider

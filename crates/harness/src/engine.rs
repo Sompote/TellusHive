@@ -236,6 +236,11 @@ impl Domain {
         let mut meta = json!({});
         if !r.is_error {
             if let Some(m) = Plugins::keep_model(&c, server, tool, &project.dir) {
+                // the BIM model as a triangle mesh for the 3D view in the output panel
+                // (an Aedifex without export_mesh just leaves the view out)
+                if server == "aedifex" {
+                    let _ = c.call("export_mesh", json!({"path": m.with_extension("axmesh").display().to_string()}));
+                }
                 meta["model"] = json!({"plugin": server, "path": m});
             }
         }
@@ -299,6 +304,25 @@ impl Engine {
         }
     }
 
+    /// Writes the 3D view of the project's Aedifex model (`models/aedifex.axmesh`), starting
+    /// Aedifex on the model file when needed. Used for models made before the view existed.
+    pub fn export_bim_mesh(&self) -> Result<PathBuf, String> {
+        let settings = self.domain.settings();
+        let project = self.domain.project();
+        let s = live::spec("aedifex").ok_or("no Aedifex spec")?;
+        let model = live::model_path(&project.dir, s);
+        if !model.is_file() {
+            return Err("this project has no Aedifex model yet".into());
+        }
+        let c = self.plugins.ensure_for(&settings, "aedifex", Some(&project.dir))?;
+        let out = model.with_extension("axmesh");
+        let r = c.call("export_mesh", json!({"path": out.display().to_string()}))?;
+        if r.is_error || !out.is_file() {
+            return Err(format!("Aedifex could not export the 3D view ({}); it needs an Aedifex build with export_mesh", crate::project::clip(&r.text, 200)));
+        }
+        Ok(out)
+    }
+
     /// The plugin tree and each plugin's state.
     pub fn dump_plugins(&self) -> String {
         self.hive.dump()
@@ -334,6 +358,28 @@ impl Engine {
                 return Err(e);
             }
         };
+        // another TellusHive (a window, `run`, an MCP server) may be in a turn of this
+        // conversation: opening it here would seal that turn as interrupted and interleave two
+        // writers in one log
+        let lock = project.dir.join("sessions/current.lock");
+        if let Some(pid) = std::fs::read_to_string(&lock).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
+            if pid != std::process::id() && pid_alive(pid) {
+                let e = format!("this project's conversation is in use by another TellusHive (process {pid}); wait for it to finish or stop it first");
+                let _ = tx.send(Event::Error { run: 0, agent: coord.name.clone(), text: e.clone() });
+                return Err(e);
+            }
+        }
+        let _ = std::fs::create_dir_all(project.dir.join("sessions"));
+        let _ = std::fs::write(&lock, std::process::id().to_string());
+        struct Unlock(PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                if std::fs::read_to_string(&self.0).ok().and_then(|s| s.trim().parse::<u32>().ok()) == Some(std::process::id()) {
+                    let _ = std::fs::remove_file(&self.0);
+                }
+            }
+        }
+        let _unlock = Unlock(lock);
         let session = std::fs::read_to_string(project.dir.join(CURRENT)).ok().and_then(|id| store.open(id.trim()).ok());
         let session = match session {
             Some(s) => s,
@@ -390,6 +436,11 @@ impl Engine {
         }
         Inbound { text, images, source: "user".into() }
     }
+}
+
+/// Whether a process is running (signal 0 checks without touching it).
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill").arg("-0").arg(pid.to_string()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
 }
 
 pub(crate) fn stamp() -> u64 {

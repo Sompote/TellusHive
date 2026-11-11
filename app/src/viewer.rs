@@ -20,12 +20,17 @@ pub struct Viewer {
     pub cad_status: String,
     cache: Option<(PathBuf, std::time::SystemTime, Content)>,
     zoom: f32,
+    /// The 3D view's camera, kept while the same model reloads.
+    cam: crate::view3d::Camera,
+    drawn: crate::view3d::Drawn,
+    picked: Option<u32>,
 }
 
 enum Content {
     Sheet(Box<Sheet>),
     Text(String),
     Image,
+    Mesh(Result<Box<crate::view3d::MeshModel>, String>),
     Other,
 }
 
@@ -39,6 +44,10 @@ fn sibling(p: &Path, e: &str) -> PathBuf {
 
 impl Viewer {
     pub fn show(&mut self, p: PathBuf) {
+        if self.path.as_ref() != Some(&p) {
+            self.cam = Default::default();
+            self.picked = None;
+        }
         self.path = Some(p);
         self.zoom = 1.0;
     }
@@ -50,6 +59,7 @@ impl Viewer {
                 None => Content::Text(std::fs::read_to_string(p).unwrap_or_default()),
             },
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => Content::Image,
+            "axmesh" => Content::Mesh(crate::view3d::load(p).map(Box::new)),
             "pdf" => {
                 let md = sibling(p, "md");
                 match std::fs::read_to_string(&md) {
@@ -92,6 +102,7 @@ impl Viewer {
                     "svg" | "dxf" => Icon::Drafting,
                     "pdf" | "md" => Icon::FileText,
                     "png" | "jpg" | "jpeg" => Icon::Picture,
+                    "axmesh" => Icon::Rotate,
                     _ => Icon::FileText,
                 };
                 let (r, _) = ui.allocate_exact_size(egui::vec2(24.0, 28.0), egui::Sense::hover());
@@ -119,6 +130,15 @@ impl Viewer {
                         }
                         if ui.add(chrome::primary_button("Open in CADCraft")).on_hover_text("Open the DXF in the CADCraft window").clicked() {
                             self.open_in_cad = Some(sibling(&p, "dxf"));
+                        }
+                    }
+                    if e == "axmesh" {
+                        if icons::button(ui, Icon::Fit, "Fit the model (or double-click it)", false).clicked() {
+                            self.cam.fitted = false;
+                        }
+                        let model = p.with_extension("aedifex");
+                        if model.exists() && ui.add(egui::Button::new("Open in Aedifex").frame(false)).on_hover_text("Open the model file in the Aedifex window").clicked() {
+                            chrome::open_path(&model);
                         }
                     }
                     if is_image {
@@ -170,6 +190,19 @@ impl Viewer {
                     }
                 });
             }
+            Content::Mesh(Ok(m)) => {
+                let what = match self.picked {
+                    Some(id) => format!("Element #{id} selected · {} elements, {} triangles", m.elements, m.tris.len()),
+                    None => format!("{} elements, {} triangles · drag to rotate, right-drag or Shift-drag to pan, scroll to zoom, double-click to fit, click to pick an element", m.elements, m.tris.len()),
+                };
+                ui.label(RichText::new(what).size(11.5).color(t.text_dim));
+                ui.add_space(4.0);
+                let bg = if ui.visuals().dark_mode { Color32::from_rgb(38, 41, 46) } else { Color32::from_rgb(232, 236, 241) };
+                if let Some(id) = crate::view3d::ui(ui, m, &mut self.cam, &mut self.drawn, self.picked, bg) {
+                    self.picked = (id != u32::MAX && self.picked != Some(id)).then_some(id);
+                }
+            }
+            Content::Mesh(Err(e)) => chrome::hint(ui, &format!("The 3D view could not be read: {e}")),
             Content::Other => {
                 chrome::hint(ui, "No preview for this file type.");
                 if ui.add(chrome::primary_button("Open")).clicked() {

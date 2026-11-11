@@ -16,6 +16,7 @@ mod settings_view;
 mod standards;
 mod team;
 mod theme;
+mod view3d;
 mod viewer;
 
 use std::path::PathBuf;
@@ -90,8 +91,16 @@ fn dump_plugins(args: &[String]) -> i32 {
 
 /// One turn in the terminal: prints every event as it happens, keeps the conversation.
 fn run_headless(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("usage: tellushive run [--project DIR] \"message\"\n\nSends one message to the project's coordinator and continues its conversation.");
+        return 0;
+    }
     let settings = th_harness::Settings::load();
     let msg = args.iter().skip(2).filter(|a| !a.starts_with("--")).filter(|a| Some(*a) != arg_value(args, "--project").as_ref()).cloned().collect::<Vec<_>>().join(" ");
+    if msg.trim().is_empty() {
+        eprintln!("tellushive run: no message given (usage: tellushive run [--project DIR] \"message\")");
+        return 2;
+    }
     let project = match arg_value(args, "--project") {
         Some(d) => th_harness::Project::open_or_create(&PathBuf::from(d)),
         None => app::default_project(&settings),

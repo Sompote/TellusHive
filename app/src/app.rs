@@ -824,6 +824,22 @@ impl App {
             if chrome::object_row(ui, colour, Some(Icon::Rotate), &format!("{} · {program}", s.label), &state, false).on_hover_text(tip).clicked() {
                 self.open_model_window(s.plugin, true);
             }
+            if s.plugin == "aedifex" {
+                let mesh = th_harness::live::model_path(&self.project.dir, s).with_extension("axmesh");
+                let stale = std::fs::metadata(&mesh).and_then(|m| m.modified()).map(|m| m < modified).unwrap_or(true);
+                let sel = self.viewer.path.as_ref() == Some(&mesh);
+                let label = if stale { "make it" } else { "rotate, zoom" };
+                if chrome::object_row(ui, t.accent, Some(Icon::Rotate), "3D view", label, sel).on_hover_text("Shows the Aedifex model here: drag to rotate, scroll to zoom, right-drag to pan, click to pick an element.").clicked() {
+                    if stale {
+                        match self.engine.export_bim_mesh() {
+                            Ok(p) => self.viewer.show(p),
+                            Err(e) => self.status = e,
+                        }
+                    } else {
+                        self.viewer.show(mesh);
+                    }
+                }
+            }
         }
     }
 
@@ -1265,7 +1281,10 @@ impl App {
                     self.viewer.show(f);
                 }
             }
-            if ws == Ws::Output {
+            let mesh = self.project.dir.join("models/aedifex.axmesh");
+            if ws == Ws::Output && mesh.is_file() {
+                self.viewer.show(mesh);
+            } else if ws == Ws::Output {
                 if let Some(f) = self.artifacts.iter().find(|a| a.kind == ArtifactKind::Calculation).and_then(|a| a.files.iter().find(|f| f.extension().is_some_and(|e| e == "json")).cloned()) {
                     self.viewer.show(f);
                 }
@@ -1361,9 +1380,14 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.shot_step(ctx);
         let saves: Vec<(String, PathBuf)> = self.chat.model_saves.drain(..).collect();
-        for (plugin, _) in saves {
+        for (plugin, path) in saves {
             if !self.run_models.contains(&plugin) {
                 self.run_models.push(plugin.clone());
+                // the first change to the BIM model in this task: show it in 3D beside the chat
+                let mesh = path.with_extension("axmesh");
+                if plugin == "aedifex" && mesh.is_file() {
+                    self.viewer.show(mesh);
+                }
             }
             // a window that follows its file shows the work as it happens
             if self.settings.open_models && th_harness::live::spec(&plugin).is_some_and(|s| s.follows_file) && !self.window_open(&plugin) {
