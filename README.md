@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.2 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.2):
+Version 0.1.3 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.3):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.2-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.2/TellusHive-0.1.2-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.2-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.2/TellusHive-0.1.2-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.3-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.3/TellusHive-0.1.3-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.3-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.3/TellusHive-0.1.3-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,18 +32,22 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.2
+### What is new in 0.1.3
 
-The team now keeps to the work the engineer asks for, so a slope, excavation or embankment
-analysis goes to the geotechnical analyst alone and no longer starts the BIM modeller or the
-structural analyst, while any further deliverable is offered in the answer instead of being made
-unasked. When the engineer does ask for a model of the ground, the BIM modeller builds it as
-terrain in Aedifex rather than inventing a building, either as a graded cut or fill slope (the
-cross-section with its berms swept along an alignment) or as a surface from survey points or
-contours, which needs an Aedifex build with terrain support. A team saved under 0.1.0 keeps its
-old Coordinator and BIM modeller instructions, although the scope rule in the shared team prompt
-applies to every team, so choose **Reset to the default design office** in step **3 Team** to
-pick up the new wording.
+The team keeps to the work the engineer asks for, so a slope, excavation or embankment analysis
+goes to the geotechnical analyst alone and no longer starts the BIM modeller or the structural
+analyst, while any further deliverable is offered in the answer instead of being made unasked.
+When the engineer does ask for a model of the ground, the BIM modeller builds it as terrain in
+Aedifex rather than inventing a building, either as a graded cut or fill slope (the cross-section
+with its berms swept along an alignment) or as a surface from survey points or contours. This
+needs an Aedifex build with the terrain tools `add_graded_slope` and `add_topography`, because
+TellusHive starts the Aedifex that **4 Plugins** points to and an older one lacks them.
+
+A team and settings saved by an earlier version now take up the new built-in texts on their own,
+because any agent role, instruction or plugin description that is still word for word an earlier
+default is replaced with the current one, whereas a text you edited is kept. If you changed the
+Coordinator or the BIM modeller yourself, choose **Reset to the default design office** in step
+**3 Team** to get the new wording, then add your changes again.
 
 ## How to use
 
