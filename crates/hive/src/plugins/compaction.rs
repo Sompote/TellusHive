@@ -78,6 +78,7 @@ impl Compaction {
             tools: vec![],
             temperature: Some(0.0),
             max_tokens: Some(4000),
+            reasoning: Some("off".into()),
             purpose: "compaction".into(),
             session: s.id().to_string(),
         };

@@ -18,6 +18,8 @@ pub struct LlmRequest {
     pub tools: Vec<ToolSpec>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    /// Thinking: "off", "low", "medium", "high"; None = the provider's default.
+    pub reasoning: Option<String>,
     /// "agent" for a loop step, "compaction" for a summary, or a plugin's own purpose.
     pub purpose: String,
     /// The agent session the request belongs to.
@@ -121,7 +123,7 @@ impl LlmAdapter for OpenAiCompatible {
         p.base_url.contains("deepseek.com")
     }
     fn stream(&self, req: &LlmRequest, on: &mut dyn FnMut(Delta), cancel: &AtomicBool) -> Result<Reply, CallError> {
-        let opt = ChatOptions { temperature: req.temperature, max_tokens: req.max_tokens, ..Default::default() };
+        let opt = ChatOptions { temperature: req.temperature, max_tokens: req.max_tokens, reasoning: req.reasoning.clone(), ..Default::default() };
         th_llm::chat_stream(&req.provider, &req.model, &req.wire_messages(), &req.tools, &opt, on, cancel)
     }
 }

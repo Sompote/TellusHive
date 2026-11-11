@@ -258,13 +258,15 @@ pub struct Reply {
 #[derive(Debug, Clone)]
 pub struct ChatOptions {
     pub temperature: Option<f32>,
+    /// Thinking: "off", "low", "medium" or "high"; None = the provider's default.
+    pub reasoning: Option<String>,
     pub max_tokens: Option<u32>,
     pub timeout: Duration,
 }
 
 impl Default for ChatOptions {
     fn default() -> Self {
-        ChatOptions { temperature: Some(0.2), max_tokens: Some(8192), timeout: Duration::from_secs(300) }
+        ChatOptions { temperature: Some(0.2), reasoning: None, max_tokens: Some(8192), timeout: Duration::from_secs(300) }
     }
 }
 
@@ -301,6 +303,10 @@ pub fn request_body(model: &str, messages: &[Message], tools: &[ToolSpec], opt: 
     }
     if let Some(m) = opt.max_tokens {
         body["max_tokens"] = json!(m);
+    }
+    if let Some(r) = opt.reasoning.as_deref().filter(|r| !r.is_empty()) {
+        // OpenRouter's unified field; it maps it to each provider's own switch
+        body["reasoning"] = if r == "off" { json!({"enabled": false}) } else { json!({"effort": r}) };
     }
     body
 }
@@ -618,6 +624,16 @@ mod tests {
         assert_eq!(tc[1].function.arguments, "{\"a\":1}");
         assert_eq!(r.reasoning.as_deref(), Some("think"));
         assert_eq!(r.usage.prompt_tokens, 10);
+    }
+
+    #[test]
+    fn reasoning_switch_in_the_body() {
+        let mut o = ChatOptions::default();
+        assert!(request_body("m", &[], &[], &o).get("reasoning").is_none());
+        o.reasoning = Some("off".into());
+        assert_eq!(request_body("m", &[], &[], &o)["reasoning"], json!({"enabled": false}));
+        o.reasoning = Some("high".into());
+        assert_eq!(request_body("m", &[], &[], &o)["reasoning"]["effort"], "high");
     }
 
     #[test]

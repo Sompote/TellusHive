@@ -302,6 +302,9 @@ pub struct AgentSpec {
     pub can_use_external: bool,
     pub max_turns: usize,
     pub temperature: f32,
+    /// Thinking before each reply: "" (the provider's default), "off", "low", "medium",
+    /// "high". Off makes routine agents (drafting, modelling) several times faster.
+    pub thinking: String,
     /// Hex colour of its node and chat bubbles.
     pub color: String,
     /// Position on the team canvas.
@@ -324,6 +327,7 @@ impl Default for AgentSpec {
             can_use_external: false,
             max_turns: 30,
             temperature: 0.2,
+            thinking: String::new(),
             color: "#2f74d0".into(),
             pos: [0.0, 0.0],
         }
@@ -362,7 +366,7 @@ pub fn default_team() -> TeamSpec {
         id: "coordinator".into(),
         name: "Coordinator".into(),
         role: "Plans the design, delegates to the specialists, reviews their work and answers the engineer.".into(),
-        instructions: "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, state the assumption you made and flag it clearly. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d.".into(),
+        instructions: "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, state the assumption you made and flag it clearly. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round.".into(),
         tools: s(&["list_standards", "search_standards", "get_clause", "list_files", "read_file", "write_file", "read_skill", "describe_image", "list_design_modules"]),
         skills: s(&["*"]),
         can_delegate: true,
@@ -388,22 +392,25 @@ pub fn default_team() -> TeamSpec {
         id: "checker".into(),
         name: "Checker".into(),
         role: "Independently checks a design: recomputes the key results, verifies clause use, and returns PASS or a list of errors.".into(),
-        instructions: "You are the independent checking engineer. Do not trust the designer's numbers: recompute the governing quantities yourself (calc_sheet or a design module), confirm each factor and equation against the standards library, and check units, load combinations and detailing limits. Reply with a verdict line 'CHECK: PASS' or 'CHECK: FAIL', then a numbered list of findings, each with the clause and the corrected value. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Before you report a load inconsistency, check it with Vu read as the support reaction (for a uniform load on a simply supported span, Mu = Vu L/4); flag an inconsistency only if it remains.".into(),
+        instructions: "You are the independent checking engineer. Do not trust the designer's numbers: recompute the governing quantities yourself (calc_sheet or a design module), confirm each factor and equation against the standards library, and check units, load combinations and detailing limits. Reply with a verdict line 'CHECK: PASS' or 'CHECK: FAIL', then a numbered list of findings, each with the clause and the corrected value. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Before you report a load inconsistency, check it with Vu read as the support reaction (for a uniform load on a simply supported span, Mu = Vu L/4); flag an inconsistency only if it remains. Report every finding in one reply so the design can be revised in a single round: do not stop at the first error. Recompute only the governing quantities and keep the reply short.".into(),
         tools: s(&["list_standards", "search_standards", "get_clause", "list_design_modules", "run_design_module", "calc_sheet", "list_files", "read_file", "read_skill"]),
         skills: s(&["*"]),
         color: "#c23b2e".into(),
         pos: [420.0, 95.0],
+        thinking: "high".into(),
         ..Default::default()
     };
     let drafter = AgentSpec {
         id: "drafter".into(),
         name: "Drafter".into(),
         role: "Produces 2D engineering drawings (SVG + DXF) of sections, plans and details.".into(),
-        instructions: "You are a CAD drafter. Draw to real dimensions in the units given, use layers (outline, concrete, rebar, soil, dims, text), dimension every governing size, and label bars and materials. Design modules already produce a section drawing; draw extra views and details with make_drawing. Each drawing is saved as <project folder>/drawings/<name>.dxf; when the engineer wants to see or edit a drawing in CAD, open that DXF (absolute path) with the CADCraft plugin's `open` tool, and use its command_line for edits the engineer asks for in CAD.".into(),
+        instructions: "You are a CAD drafter. Draw to real dimensions in the units given, use layers (outline, concrete, rebar, soil, dims, text), dimension every governing size, and label bars and materials. Design modules already produce a section drawing; draw extra views and details with make_drawing. Each drawing is saved as <project folder>/drawings/<name>.dxf; when the engineer wants to see or edit a drawing in CAD, open that DXF (absolute path) with the CADCraft plugin's `open` tool, and use its command_line for edits the engineer asks for in CAD. Look at each finished drawing once, at the end (one render or describe_image per drawing), not after every change.".into(),
         tools: s(&["make_drawing", "list_files", "read_file"]),
         plugins: s(&["cadcraft"]),
         color: "#9a6a0a".into(),
         pos: [420.0, 190.0],
+        thinking: "off".into(),
+        max_turns: 60,
         ..Default::default()
     };
     let reporter = AgentSpec {
@@ -414,6 +421,7 @@ pub fn default_team() -> TeamSpec {
         tools: s(&["write_report", "list_files", "read_file", "list_standards"]),
         color: "#7b4fd6".into(),
         pos: [420.0, 285.0],
+        thinking: "off".into(),
         ..Default::default()
     };
     let analyst_tools = s(&["list_standards", "search_standards", "get_clause", "calc_sheet", "list_files", "read_file", "write_file", "read_skill", "describe_image"]);
@@ -465,7 +473,8 @@ pub fn default_team() -> TeamSpec {
         plugins: s(&["aedifex", "cadcraft"]),
         color: "#c25a35".into(),
         pos: [420.0, 665.0],
-        max_turns: 60,
+        max_turns: 80,
+        thinking: "off".into(),
         ..Default::default()
     };
     TeamSpec {

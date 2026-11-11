@@ -588,6 +588,17 @@ impl TeamView {
                 ui.add(egui::Slider::new(&mut a.temperature, 0.0..=1.0));
             });
             ui.horizontal(|ui| {
+                chrome::row_label(ui, "Thinking");
+                let shown = if a.thinking.is_empty() { "provider default".to_string() } else { a.thinking.clone() };
+                egui::ComboBox::from_id_salt("agent_thinking").selected_text(shown).width(170.0).show_ui(ui, |ui| {
+                    for (v, l) in [("", "provider default"), ("off", "off (fastest)"), ("low", "low"), ("medium", "medium"), ("high", "high (most careful)")] {
+                        ui.selectable_value(&mut a.thinking, v.to_string(), l);
+                    }
+                })
+                .response
+                .on_hover_text("How long the model thinks before each reply. Off suits routine work (drafting, BIM modelling); keep it on for designing and checking. Sent to OpenRouter as its reasoning setting.");
+            });
+            ui.horizontal(|ui| {
                 chrome::row_label(ui, "Max turns");
                 ui.add_sized([70.0, 28.0], egui::DragValue::new(&mut a.max_turns).range(1..=200));
             });

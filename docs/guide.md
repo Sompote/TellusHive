@@ -21,6 +21,24 @@ agent harness see [architecture.md](architecture.md).
 - **Settings** holds the providers and keys, the default and vision models, the embedding
   model, Claude Code and Codex, the skill folders, the projects folder and the theme.
 
+## Speed: thinking and revision rounds
+
+Each agent has a **Thinking** setting in the **Team** step: provider default, off, low, medium or
+high. It is sent to OpenRouter as its reasoning switch, so DeepSeek V4.1 Flash answers routine
+steps without a long hidden reasoning pass. Measured on one short question, thinking off answered
+in 0.8 s with 18 output tokens, against 1.8 s and 168 tokens with the default. The default team
+turns thinking off for the drafter, the BIM modeller and the reporter, whose work is mostly
+mechanical, and sets it high for the checker. A provider other than OpenRouter may ignore the
+setting.
+
+The default team also limits rework, which was the largest cost in a recorded retaining wall job
+(the designer ran four times and the checker four times). The checker reports every finding in
+one reply, the coordinator sends them to the designer in one revision task and allows at most two
+revision rounds before it asks the engineer, the drafter looks at each drawing once at the end,
+and the drafter and the BIM modeller have 60 and 80 steps instead of 30 and 60. Claude Code as
+an agent's model is much slower than an API model (about 7 minutes per design step in that job),
+so it suits programming tasks better than routine design steps.
+
 ## The BIM model in 3D
 
 When the agents work in Aedifex, TellusHive keeps a 3D view of the model in the output panel.

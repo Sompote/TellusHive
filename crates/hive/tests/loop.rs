@@ -50,7 +50,7 @@ fn calls(cs: &[(&str, &str, serde_json::Value)]) -> Reply {
 }
 
 fn preset(id: &str) -> AgentPreset {
-    AgentPreset { id: id.into(), name: id.to_uppercase(), role: format!("{id} role"), provider: Provider::deepseek(), model: "m".into(), temperature: Some(0.2), max_tokens: Some(1000), max_steps: 12, tools: ToolFilter::All, meta: json!({}) }
+    AgentPreset { id: id.into(), name: id.to_uppercase(), role: format!("{id} role"), provider: Provider::deepseek(), model: "m".into(), temperature: Some(0.2), max_tokens: Some(1000), reasoning: None, max_steps: 12, tools: ToolFilter::All, meta: json!({}) }
 }
 
 fn boot(cfg: BaseConfig, script: Box<Script>) -> (Hive, Arc<Scripted>) {

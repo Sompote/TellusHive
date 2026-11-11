@@ -140,7 +140,7 @@ impl AgentLoop {
             let p = &agent.preset;
             let mut rc = RequestControls {
                 agent: agent.clone(),
-                req: LlmRequest { provider: p.provider.clone(), model: p.model.clone(), system, messages: vec![], tools: toolset.iter().map(|d| d.spec()).collect(), temperature: p.temperature, max_tokens: p.max_tokens, purpose: "agent".into(), session: s.id().to_string() },
+                req: LlmRequest { provider: p.provider.clone(), model: p.model.clone(), system, messages: vec![], tools: toolset.iter().map(|d| d.spec()).collect(), temperature: p.temperature, max_tokens: p.max_tokens, reasoning: p.reasoning.clone(), purpose: "agent".into(), session: s.id().to_string() },
             };
             self.request.dispatch(&mut rc, &|_| ());
             let passback = llm.adapter_for(&rc.req.provider).map(|a| a.reasoning_passback(&rc.req.provider)).unwrap_or(false);

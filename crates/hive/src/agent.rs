@@ -43,6 +43,8 @@ pub struct AgentPreset {
     pub model: String,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    /// Thinking: "off", "low", "medium", "high"; None = the provider's default.
+    pub reasoning: Option<String>,
     /// Steps per turn before the loop stops it.
     pub max_steps: usize,
     pub tools: ToolFilter,
