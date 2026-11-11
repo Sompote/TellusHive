@@ -61,41 +61,104 @@ pub struct RunOutput {
     pub text: String,
     pub ok: bool,
     pub seconds: f64,
+    /// Tokens the program reported (Claude Code's JSON result); zero when unknown.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_tokens: u64,
+}
+
+/// An MCP server the external agent is given (`design` for the tool runs, `tellushive` when
+/// the program runs as an agent's model).
+#[derive(Debug, Clone)]
+pub struct McpServer {
+    pub name: String,
+    pub command: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// One non-interactive run of Claude Code or Codex.
+#[derive(Debug, Clone)]
+pub struct Job<'a> {
+    pub prompt: &'a str,
+    pub workdir: &'a Path,
+    /// The project folder, readable by the program.
+    pub project: &'a Path,
+    pub mcp: Option<McpServer>,
+    /// Model name for the program (`--model` / `-m`); empty = its default.
+    pub model: &'a str,
+    /// Only the MCP server's tools are allowed (Claude Code `--allowedTools`).
+    pub mcp_only: bool,
 }
 
 /// Runs one non-interactive task. `mcp_exe` + `project` give the external agent our tools.
 pub fn run(which: Which, cfg: &ExternalAgent, prompt: &str, workdir: &Path, project: &Path, mcp_exe: Option<&Path>, cancel: &AtomicBool) -> Result<RunOutput, String> {
+    let mcp = mcp_exe.map(|exe| McpServer { name: "design".into(), command: exe.to_path_buf(), args: vec!["--mcp".into(), "--project".into(), project.display().to_string()] });
+    run_job(which, cfg, &Job { prompt, workdir, project, mcp, model: "", mcp_only: true }, cancel)
+}
+
+/// Runs a job. The prompt goes in on stdin, so long conversations are not limited by the
+/// size of a command line.
+pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool) -> Result<RunOutput, String> {
+    use std::io::Write;
     if !cfg.enabled {
         return Err(format!("{} is switched off in Settings", which.program()));
     }
     let prog = find_program(which.program(), &cfg.path).ok_or_else(|| format!("'{}' was not found; install it or set its path in Settings", which.program()))?;
+    let workdir = job.workdir;
     std::fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
     let mut cmd = Command::new(&prog);
-    cmd.current_dir(workdir).env("PATH", child_path(&prog)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let last_msg = workdir.join(".codex_last_message.txt");
+    cmd.current_dir(workdir).env("PATH", child_path(&prog)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // a fresh session, not a child of a Claude Code session this app may run inside
+    for (k, _) in std::env::vars() {
+        if k == "CLAUDECODE" || k.starts_with("CLAUDE_CODE_") {
+            cmd.env_remove(k);
+        }
+    }
+    if cfg.subscription {
+        cmd.env_remove(if which == Which::ClaudeCode { "ANTHROPIC_API_KEY" } else { "OPENAI_API_KEY" });
+    }
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let last_msg = workdir.join(format!(".codex_last_message_{}_{}_{}.txt", std::process::id(), crate::engine::stamp(), RUNS.fetch_add(1, Ordering::Relaxed)));
     match which {
         Which::ClaudeCode => {
-            cmd.arg("-p").arg(prompt).arg("--output-format").arg("json").arg("--add-dir").arg(project);
-            if let Some(exe) = mcp_exe {
-                let cfg_path = workdir.join(".tellushive_mcp.json");
-                let v = json!({"mcpServers": {"design": {"command": exe, "args": ["--mcp", "--project", project]}}});
+            cmd.arg("-p").arg("--output-format").arg("json").arg("--add-dir").arg(job.project);
+            if !job.model.is_empty() {
+                cmd.arg("--model").arg(job.model);
+            }
+            if let Some(m) = &job.mcp {
+                let cfg_path = workdir.join(format!(".tellushive_mcp_{}.json", m.name));
+                let v = json!({"mcpServers": {m.name.clone(): {"command": m.command, "args": m.args}}});
                 std::fs::write(&cfg_path, v.to_string()).map_err(|e| e.to_string())?;
-                cmd.arg("--mcp-config").arg(&cfg_path).arg("--allowedTools").arg("mcp__design");
+                cmd.arg("--mcp-config").arg(&cfg_path);
+                if job.mcp_only {
+                    cmd.arg("--allowedTools").arg(format!("mcp__{}", m.name));
+                }
             }
             cmd.args(&cfg.args);
         }
         Which::Codex => {
             cmd.arg("exec").arg("--skip-git-repo-check").arg("-C").arg(workdir).arg("--output-last-message").arg(&last_msg);
-            if let Some(exe) = mcp_exe {
-                cmd.arg("-c").arg(format!("mcp_servers.design.command={}", json!(exe.display().to_string())));
-                cmd.arg("-c").arg(format!("mcp_servers.design.args={}", json!(["--mcp", "--project", project.display().to_string()])));
+            if !job.model.is_empty() {
+                cmd.arg("-m").arg(job.model);
+            }
+            if let Some(m) = &job.mcp {
+                cmd.arg("-c").arg(format!("mcp_servers.{}.command={}", m.name, json!(m.command.display().to_string())));
+                cmd.arg("-c").arg(format!("mcp_servers.{}.args={}", m.name, json!(m.args)));
+                // our tools run under the harness's own pipeline; codex exec cannot ask anyone
+                cmd.arg("-c").arg(format!("mcp_servers.{}.default_tools_approval_mode=\"approve\"", m.name));
             }
             cmd.args(&cfg.args);
-            cmd.arg(prompt);
+            cmd.arg("-");
         }
     }
     let t0 = Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", prog.display()))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let p = job.prompt.to_string();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(p.as_bytes());
+        });
+    }
     let mut out_pipe = child.stdout.take().ok_or("no stdout")?;
     let mut err_pipe = child.stderr.take().ok_or("no stderr")?;
     let out_t = std::thread::spawn(move || {
@@ -123,21 +186,27 @@ pub fn run(which: Which, cfg: &ExternalAgent, prompt: &str, workdir: &Path, proj
     let stdout = out_t.join().unwrap_or_default();
     let stderr = err_t.join().unwrap_or_default();
     let seconds = t0.elapsed().as_secs_f64();
-    let (text, ok) = match which {
+    let mut out = RunOutput { text: String::new(), ok: status.success(), seconds, input_tokens: 0, output_tokens: 0, cached_tokens: 0 };
+    match which {
         Which::ClaudeCode => match serde_json::from_str::<Value>(stdout.trim()) {
-            Ok(v) => (v.get("result").and_then(|r| r.as_str()).unwrap_or("").to_string(), !v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) && status.success()),
-            Err(_) => (format!("{stdout}\n{stderr}"), status.success()),
+            Ok(v) => {
+                out.text = v.get("result").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                out.ok = !v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) && status.success();
+                let u = |k: &str| v.pointer(&format!("/usage/{k}")).and_then(|x| x.as_u64()).unwrap_or(0);
+                out.cached_tokens = u("cache_read_input_tokens");
+                out.input_tokens = u("input_tokens") + u("cache_creation_input_tokens") + out.cached_tokens;
+                out.output_tokens = u("output_tokens");
+            }
+            Err(_) => out.text = format!("{stdout}\n{stderr}"),
         },
         Which::Codex => {
             let last = std::fs::read_to_string(&last_msg).unwrap_or_default();
-            if last.trim().is_empty() {
-                (format!("{}\n{}", tail(&stdout, 4000), tail(&stderr, 2000)), status.success())
-            } else {
-                (last, status.success())
-            }
+            let _ = std::fs::remove_file(&last_msg);
+            out.text = if last.trim().is_empty() { format!("{}\n{}", tail(&stdout, 4000), tail(&stderr, 2000)) } else { last };
         }
-    };
-    Ok(RunOutput { text: text.trim().to_string(), ok, seconds })
+    }
+    out.text = out.text.trim().to_string();
+    Ok(out)
 }
 
 fn tail(s: &str, n: usize) -> String {

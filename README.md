@@ -38,7 +38,8 @@ cargo build --release
 ```
 
 The last command opens the window. Add a provider key in **Settings**, or set
-`OPENROUTER_API_KEY` or `DEEPSEEK_API_KEY` before starting it. The [user guide](docs/guide.md)
+`OPENROUTER_API_KEY` or `DEEPSEEK_API_KEY` before starting it. Without any key, choose the
+provider `claude-code` or `codex` and the agents run on your Claude Code or Codex login instead. The [user guide](docs/guide.md)
 explains the workspaces, the team canvas, templates and the engineering programs.
 
 ### Other commands

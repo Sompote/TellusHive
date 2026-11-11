@@ -193,7 +193,7 @@ impl AgentLoop {
                 calls: calls.clone(),
                 finish: reply.finish_reason.clone(),
                 provider: rc.req.provider.name.clone(),
-                model: if rc.req.model.is_empty() { rc.req.provider.default_model.clone() } else { rc.req.model.clone() },
+                model: [rc.req.model.as_str(), rc.req.provider.default_model.as_str(), rc.req.provider.name.as_str()].into_iter().find(|m| !m.is_empty()).unwrap_or_default().to_string(),
                 usage: Usage { prompt: reply.usage.prompt_tokens, completion: reply.usage.completion_tokens, cached: reply.usage.cached_tokens },
             });
             if !text.trim().is_empty() {

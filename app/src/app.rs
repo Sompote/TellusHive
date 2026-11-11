@@ -483,7 +483,7 @@ impl App {
         egui::TopBottomPanel::bottom("status").exact_height(28.0).frame(status).show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 18.0;
-                let key = self.settings.provider("").map(|p| p.key().is_some() || p.base_url.contains("localhost")).unwrap_or(false);
+                let key = self.settings.provider("").map(|p| p.key().is_some() || p.base_url.contains("localhost") || p.is_cli()).unwrap_or(false);
                 if self.chat.busy() {
                     chrome::status_dot(ui, t.accent, self.chat.current_activity());
                 } else if let Some(e) = self.chat.last_error() {

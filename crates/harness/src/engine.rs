@@ -202,6 +202,12 @@ impl Domain {
     pub fn preset(&self, a: &AgentSpec) -> Result<AgentPreset, String> {
         let settings = self.settings();
         let provider = settings.provider(&a.provider).cloned().ok_or_else(|| format!("provider '{}' not found", a.provider))?;
+        if provider.is_cli() {
+            // Claude Code or Codex runs as the model: its own login, its own default model
+            let tools = if a.tools.iter().any(|t| t == "*") { ToolFilter::All } else { ToolFilter::Only(a.tools.clone()) };
+            let model = if a.model.is_empty() { provider.default_model.clone() } else { a.model.clone() };
+            return Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: None, max_tokens: None, max_steps: a.max_turns.max(1), tools, meta: json!({"color": a.color}) });
+        }
         if provider.key().is_none() && !provider.base_url.contains("localhost") && !provider.base_url.contains("127.0.0.1") {
             return Err(format!("No API key for provider '{}'. Add it in Settings (or set {}).", provider.name, provider.key_env));
         }

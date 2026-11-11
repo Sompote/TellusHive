@@ -12,6 +12,7 @@
 //! | `tellushive-prompt` | the prompt sections (role, project, standards, team, skills, programs, rules) |
 //! | `tellushive-tool-cap` | `agent/request`: never more tools than a provider accepts |
 //! | `tellushive-ui` | session and stream events to the chat's `Event`s |
+//! | `tellushive-cli-models` | a model adapter that runs Claude Code or Codex in place of an API |
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -54,6 +55,7 @@ pub fn profile(domain: &Arc<Domain>, h: &HarnessSettings) -> Vec<Arc<dyn Plugin>
         Arc::new(Prompt),
         Arc::new(ToolCap),
         Arc::new(UiBridge),
+        Arc::new(CliModels),
     ];
     p.extend(ours.into_iter().filter(|x| !h.disabled_plugins.contains(&x.name())));
     p
@@ -618,5 +620,154 @@ mod tests {
     #[test]
     fn tool_names_are_valid() {
         assert_eq!(tool_name("tellus 2d", "get.results"), "tellus_2d__get_results");
+    }
+}
+
+// ------------------------------------------------------------------ Claude Code / Codex as the model
+
+/// Lets any agent use Claude Code or Codex as its model (providers `claude-code` and
+/// `codex`), on the engineer's subscription instead of an API key. One step of the agent is
+/// one run of the program: it gets the agent's prompt and conversation on stdin, and this
+/// program's MCP server for that agent, so it calls the same tools an API model would (the
+/// built-in tools, the agent's programs, `delegate`, todo and task board), each through the
+/// harness pipeline. Its tool calls are logged in a session of their own and mirrored into
+/// the calling agent's session, so the chat shows them as they happen.
+struct CliModels;
+
+struct CliAdapter {
+    ctx: Context,
+    d: Arc<Domain>,
+}
+
+/// The prompt for one step: the agent's system prompt, how it works here, and the
+/// conversation as a transcript.
+fn cli_prompt(req: &th_hive::LlmRequest, program: &str, project: &std::path::Path) -> String {
+    let mut s = req.system.clone();
+    s.push_str(&format!(
+        "\n\n# How you work here\nYou are this agent inside TellusHive, run through {program} instead of a model API. Your tools are those of the MCP server `tellushive`: the built-in design tools, the standards library, your plugins, and `delegate` when you lead a team. Use them for every calculation, clause lookup, drawing, report and delegation, as the rules above require. Do not work engineering results out in your head, and do not write project files by other means when a tool can do it. The project folder is {}. When the work is done, reply with your final answer to the last message only.\n\n# Conversation so far\n",
+        project.display()
+    ));
+    for m in &req.messages {
+        let text = match &m.content {
+            Some(th_llm::Content::Parts(parts)) => parts.iter().map(|p| match p { th_llm::Part::Text { text } => text.clone(), _ => "[picture]".into() }).collect::<Vec<_>>().join("\n"),
+            Some(c) => c.text(),
+            None => String::new(),
+        };
+        match m.role.as_str() {
+            "user" => s.push_str(&format!("\n## Message to you\n{text}\n")),
+            "assistant" => {
+                if !text.trim().is_empty() {
+                    s.push_str(&format!("\n## You answered\n{text}\n"));
+                }
+                for c in m.tool_calls.iter().flatten() {
+                    s.push_str(&format!("\n## You called {} with\n{}\n", c.function.name, clip(&c.function.arguments, 2000)));
+                }
+            }
+            "tool" => s.push_str(&format!("\n## Tool result\n{}\n", clip(&text, 6000))),
+            _ => {}
+        }
+    }
+    s.push_str("\n# Now reply to the last message.\n");
+    s
+}
+
+/// Follows the tool session the program's MCP server writes and copies its calls and results
+/// into the calling agent's session (as `cli:` calls: logged and shown, not model history).
+fn mirror(path: PathBuf, to: Arc<Agent>, done: Arc<std::sync::atomic::AtomicBool>) {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::sync::atomic::Ordering;
+    let mut pos = 0u64;
+    let mut buf = String::new();
+    loop {
+        let finished = done.load(Ordering::Relaxed);
+        if let Ok(mut f) = std::fs::File::open(&path) {
+            if f.seek(SeekFrom::Start(pos)).is_ok() {
+                let mut chunk = String::new();
+                if let Ok(n) = f.read_to_string(&mut chunk) {
+                    pos += n as u64;
+                    buf.push_str(&chunk);
+                }
+            }
+        }
+        while let Some(i) = buf.find('\n') {
+            let line: String = buf.drain(..=i).collect();
+            let Ok(ev) = serde_json::from_str::<th_hive::SessionEvent>(line.trim()) else { continue };
+            match ev.body {
+                EventBody::ToolCall { id, name, arguments } => {
+                    to.session.append(EventBody::ToolCall { id: format!("cli:{id}"), name, arguments });
+                }
+                EventBody::ToolResult { id, name, text, is_error, meta } => {
+                    to.session.append(EventBody::ToolResult { id: format!("cli:{id}"), name, text, is_error, meta });
+                }
+                _ => {}
+            }
+        }
+        if finished {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
+impl th_hive::LlmAdapter for CliAdapter {
+    fn id(&self) -> &str {
+        "cli-coding-agents"
+    }
+    fn serves(&self, p: &th_llm::Provider) -> bool {
+        p.is_cli()
+    }
+    fn stream(&self, req: &th_hive::LlmRequest, on: &mut dyn FnMut(th_llm::Delta), cancel: &std::sync::atomic::AtomicBool) -> Result<th_llm::Reply, th_llm::CallError> {
+        let fail = |message: String, cancelled: bool| th_llm::CallError { message, status: Some(400), overflow: false, cancelled };
+        let which = if req.provider.base_url.ends_with("codex") { Which::Codex } else { Which::ClaudeCode };
+        let settings = self.d.settings();
+        let project = self.d.project();
+        let cfg = if which == Which::ClaudeCode { settings.claude_code.clone() } else { settings.codex.clone() };
+        let agent = self.ctx.get::<AgentRegistry>(keys::AGENTS).and_then(|r| r.get(&req.session)).ok_or_else(|| fail(format!("no live agent for session {}", req.session), false))?;
+        let store = self.ctx.get::<SessionStore>(keys::SESSIONS).ok_or_else(|| fail("no session store".into(), false))?;
+        let exe = std::env::current_exe().ok().filter(|e| e.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tellushive"))).ok_or_else(|| fail(format!("{} as a model needs the tellushive program to serve its tools", which.program()), false))?;
+        let tools_sid = store.new_id(&format!("{}-tools", agent.preset.id));
+        let mcp = external::McpServer {
+            name: "tellushive".into(),
+            command: exe,
+            args: vec!["--mcp".into(), "--project".into(), project.dir.display().to_string(), "--agent".into(), agent.preset.id.clone(), "--session".into(), tools_sid.clone(), "--parent".into(), agent.id.clone(), "--depth".into(), agent.depth.to_string()],
+        };
+        let prompt = cli_prompt(req, which.program(), &project.dir);
+        let workdir = project.dir.join("work");
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let follower = {
+            let (path, to, done) = (project.dir.join("sessions").join(format!("{tools_sid}.jsonl")), agent.clone(), done.clone());
+            std::thread::spawn(move || mirror(path, to, done))
+        };
+        let r = external::run_job(which, &cfg, &external::Job { prompt: &prompt, workdir: &workdir, project: &project.dir, mcp: Some(mcp), model: &req.model, mcp_only: true }, cancel);
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = follower.join();
+        let out = r.map_err(|e| fail(format!("{}: {e}", which.program()), e == "cancelled"))?;
+        if !out.ok {
+            return Err(fail(format!("{} reported an error: {}", which.program(), clip(&out.text, 1500)), false));
+        }
+        on(th_llm::Delta::Text(out.text.clone()));
+        Ok(th_llm::Reply {
+            message: th_llm::Message::assistant(out.text),
+            reasoning: None,
+            finish_reason: "stop".into(),
+            usage: th_llm::Usage { prompt_tokens: out.input_tokens, completion_tokens: out.output_tokens, cached_tokens: out.cached_tokens },
+        })
+    }
+}
+
+impl Plugin for CliModels {
+    fn name(&self) -> String {
+        "tellushive-cli-models".into()
+    }
+    fn describe(&self) -> String {
+        "providers claude-code and codex: the coding agent runs as the model, with this agent's tools over MCP".into()
+    }
+    fn inject(&self) -> Vec<&'static str> {
+        vec![keys::LLM, keys::AGENTS, keys::SESSIONS, DOMAIN]
+    }
+    fn apply(&self, ctx: &Context) -> Result<(), String> {
+        let llm = ctx.expect::<th_hive::LlmService>(keys::LLM)?;
+        ctx.effect(llm.register(Arc::new(CliAdapter { ctx: ctx.clone(), d: domain(ctx)? })));
+        Ok(())
     }
 }

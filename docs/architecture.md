@@ -128,6 +128,7 @@ like `dsh --dump-config`:
 - tellushive-prompt           active   role, project, standards, team, skills, programs, rules
 - tellushive-tool-cap         active   at most 128 tools per request
 - tellushive-ui               active   session and stream events to the chat
+- tellushive-cli-models       active   providers claude-code and codex: the coding agent runs as the model, with this agent's tools over MCP
 ```
 
 The `harness` block of `settings.json` holds the base bundle's settings (compaction budget,

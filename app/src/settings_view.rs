@@ -121,6 +121,15 @@ impl SettingsView {
         });
         for i in 0..s.providers.len() {
             let name = s.providers[i].name.clone();
+            if s.providers[i].is_cli() {
+                group(ui, &format!("Provider: {name}"), "no key", |ui| {
+                    let program = if name == "codex" { "Codex" } else { "Claude Code" };
+                    chrome::hint(ui, &format!("An agent with this provider runs {program} as its model, on your {program} login instead of an API key. {program} gets that agent's tools (calculations, standards, drawings, its plugins, delegate) through this program's MCP server. Its path, arguments, time limit and the \"use my subscription\" switch are under External agents."));
+                    chrome::field(ui, "Model", &mut s.providers[i].default_model);
+                    chrome::hint(ui, if name == "codex" { "Empty = Codex's default model." } else { "Empty = Claude Code's default; or sonnet, opus, haiku." });
+                });
+                continue;
+            }
             let has_key = s.providers[i].key().is_some();
             group(ui, &format!("Provider: {name}"), if has_key { "key set" } else { "" }, |ui| {
                 let p = &mut s.providers[i];
@@ -182,7 +191,8 @@ impl SettingsView {
                 None => "not found".into(),
             };
             group(ui, if which == 0 { "Claude Code" } else { "Codex" }, &ctxt, |ui| {
-                chrome::switch_row(ui, "The coordinator may hand work to it", &mut cfg.enabled);
+                chrome::switch_row(ui, "Enabled (as a worker tool and as an agent's model)", &mut cfg.enabled);
+                chrome::switch_row(ui, if which == 0 { "Use my Claude subscription (ignore ANTHROPIC_API_KEY)" } else { "Use my ChatGPT subscription (ignore OPENAI_API_KEY)" }, &mut cfg.subscription);
                 chrome::field(ui, "Program", &mut cfg.path).on_hover_text("Empty = search PATH and the usual install folders");
                 let txt = args_slot.get_or_insert_with(|| cfg.args.join(" "));
                 if chrome::field(ui, "Arguments", txt).changed() {

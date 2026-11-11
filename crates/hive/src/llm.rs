@@ -114,8 +114,8 @@ impl LlmAdapter for OpenAiCompatible {
     fn id(&self) -> &str {
         "openai-compatible"
     }
-    fn serves(&self, _p: &Provider) -> bool {
-        true
+    fn serves(&self, p: &Provider) -> bool {
+        !p.is_cli()
     }
     fn reasoning_passback(&self, p: &Provider) -> bool {
         p.base_url.contains("deepseek.com")

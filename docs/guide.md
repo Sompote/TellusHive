@@ -21,6 +21,29 @@ agent harness see [architecture.md](architecture.md).
 - **Settings** holds the providers and keys, the default and vision models, the embedding
   model, Claude Code and Codex, the skill folders, the projects folder and the theme.
 
+## Claude Code or Codex as an agent's model
+
+Any agent can use Claude Code or Codex as its model instead of a model API: choose the provider
+`claude-code` or `codex` for it in the **Team** step, or make one of them the default provider
+in **Settings**. The agent then runs on your Claude or ChatGPT subscription and needs no API
+key, and the switch "Use my subscription" (on by default, under External agents) removes
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the program's environment so a key in your shell
+does not override the login. The model name is optional: `sonnet`, `opus` or `haiku` for Claude
+Code, or empty for the program's default.
+
+One step of such an agent is one run of the program. It receives the agent's prompt and
+conversation on stdin, together with this program's MCP server started for that agent
+(`tellushive --mcp --agent <id>`), so it calls exactly the tools an API model would have: the
+built-in design tools, the standards library, the agent's plugins, `delegate` to its team
+members, `todo_write` and the task board. Every call runs through the th-hive tool pipeline and
+is logged in a session of its own (`sessions/<agent>-tools-*.jsonl`), and the calls are copied
+into the agent's session as they happen, so the chat shows them like any other tool call. A
+team can mix providers freely, for example a coordinator on Claude Code that delegates to a
+designer on DeepSeek. Measured on one short question, the coordinator answered in 10 s on
+Claude Code and 14 s on Codex. Each Claude Code step carries the program's own system prompt
+and tools, about 116k input tokens, most of them read from its cache, and Codex runs report no
+token counts.
+
 ## Token use
 
 The window counts tokens while the agents work. The top bar shows the running total of the task

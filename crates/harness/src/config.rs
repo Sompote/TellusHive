@@ -96,11 +96,15 @@ pub struct ExternalAgent {
     /// Extra arguments, e.g. the permission mode.
     pub args: Vec<String>,
     pub timeout_min: u64,
+    /// Run on the program's own login (Claude or ChatGPT subscription): ANTHROPIC_API_KEY /
+    /// OPENAI_API_KEY are removed from its environment so a key in the shell does not
+    /// override the login.
+    pub subscription: bool,
 }
 
 impl Default for ExternalAgent {
     fn default() -> Self {
-        ExternalAgent { enabled: true, path: String::new(), args: vec![], timeout_min: 30 }
+        ExternalAgent { enabled: true, path: String::new(), args: vec![], timeout_min: 30, subscription: true }
     }
 }
 

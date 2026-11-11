@@ -33,7 +33,13 @@ fn main() {
     }
     if args.iter().any(|a| a == "--mcp") {
         let dir = arg_value(&args, "--project").map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        if let Err(e) = th_harness::serve_mcp(&dir) {
+        let opt = th_harness::ServeOptions {
+            agent: arg_value(&args, "--agent"),
+            session: arg_value(&args, "--session"),
+            parent: arg_value(&args, "--parent"),
+            depth: arg_value(&args, "--depth").and_then(|d| d.parse().ok()).unwrap_or(0),
+        };
+        if let Err(e) = th_harness::serve_mcp_with(&dir, &opt) {
             eprintln!("tellushive --mcp: {e}");
             std::process::exit(1);
         }

@@ -73,8 +73,21 @@ impl Provider {
             vision: true,
         }
     }
+    /// Claude Code run as the model (`claude -p`), on the user's Claude subscription.
+    pub fn claude_code() -> Self {
+        Provider { name: "claude-code".into(), base_url: "cli://claude-code".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false }
+    }
+    /// Codex run as the model (`codex exec`), on the user's ChatGPT subscription.
+    pub fn codex() -> Self {
+        Provider { name: "codex".into(), base_url: "cli://codex".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false }
+    }
     pub fn presets() -> Vec<Provider> {
-        vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai()]
+        vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai(), Provider::claude_code(), Provider::codex()]
+    }
+
+    /// A coding-agent program run in place of an API (no key, no HTTP).
+    pub fn is_cli(&self) -> bool {
+        self.base_url.starts_with("cli://")
     }
 
     /// The key to send: the stored one, else the environment variable.
@@ -560,6 +573,12 @@ pub fn embed(p: &Provider, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32
 
 /// Lists the models a provider serves (for the settings combo box).
 pub fn list_models(p: &Provider) -> Result<Vec<String>, String> {
+    if p.base_url == "cli://claude-code" {
+        return Ok(vec!["sonnet".into(), "opus".into(), "haiku".into()]);
+    }
+    if p.is_cli() {
+        return Ok(vec![]);
+    }
     let a = agent(Duration::from_secs(20));
     let mut req = a.get(&p.url("models"));
     if let Some(k) = p.key() {

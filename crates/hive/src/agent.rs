@@ -164,12 +164,18 @@ impl Default for AgentRegistry {
 
 impl AgentRegistry {
     pub fn create(&self, preset: AgentPreset, session: Arc<Session>, parent: Option<&Agent>, cancel: Arc<AtomicBool>) -> Arc<Agent> {
+        self.create_at(preset, session, parent.map(|p| p.depth + 1).unwrap_or(0), parent.map(|p| p.id.clone()), cancel)
+    }
+
+    /// An agent whose parent lives elsewhere (another process): its depth and parent id are
+    /// given, so delegation limits carry across the process boundary.
+    pub fn create_at(&self, preset: AgentPreset, session: Arc<Session>, depth: usize, parent: Option<String>, cancel: Arc<AtomicBool>) -> Arc<Agent> {
         let a = Arc::new(Agent {
             id: session.id().to_string(),
             run: self.runs.fetch_add(1, Ordering::Relaxed),
             preset,
-            depth: parent.map(|p| p.depth + 1).unwrap_or(0),
-            parent: parent.map(|p| p.id.clone()),
+            depth,
+            parent,
             session,
             cancel,
             inbox: Mutex::new(VecDeque::new()),
