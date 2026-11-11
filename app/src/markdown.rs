@@ -101,23 +101,76 @@ fn table(ui: &mut egui::Ui, rows: &[&str], size: f32, t: &Tokens, id: usize) {
     }
     // right-align a column whose body cells are all numbers
     let numeric: Vec<bool> = (0..cols).map(|c| rows.len() > 1 && rows[1..].iter().all(|r| r.get(c).is_none_or(|s| s.is_empty() || is_number(s)))).collect();
-    let width = ((ui.available_width() - 8.0) / cols as f32).max(48.0);
+    let cell = |k: usize, c: usize| rows[k].get(c).map(String::as_str).unwrap_or("");
+    let cell_job = |k: usize, c: usize, wrap: f32| {
+        let mut j = job(cell(k, c), size - 0.5, if k == 0 { t.accent_text } else { t.text }, k == 0, t);
+        j.wrap.max_width = wrap;
+        j
+    };
+    // each column as wide as its widest cell on one line, but never narrower than its longest
+    // word (so no word is broken); when that does not fit, the space is shared out so that
+    // narrow columns keep their natural width and the wide ones wrap
+    let (gap, pad) = (12.0_f32, 6.0_f32);
+    let mut natural = vec![0.0_f32; cols];
+    let mut least = vec![0.0_f32; cols];
+    ui.fonts(|f| {
+        for k in 0..rows.len() {
+            for c in 0..cols {
+                natural[c] = natural[c].max(f.layout_job(cell_job(k, c, f32::INFINITY)).size().x);
+                for w in cell(k, c).split_whitespace() {
+                    least[c] = least[c].max(f.layout_job(job(w, size - 0.5, t.text, k == 0, t)).size().x);
+                }
+            }
+        }
+    });
+    let room = (ui.available_width() - 2.0 * pad - 12.0 - gap * (cols as f32 - 1.0)).max(cols as f32 * 40.0);
+    let mut width: Vec<f32> = natural.iter().zip(&least).map(|(n, l)| n.max(*l).ceil()).collect();
+    if width.iter().sum::<f32>() > room {
+        let mut fixed = vec![false; cols];
+        loop {
+            let open: Vec<usize> = (0..cols).filter(|c| !fixed[*c]).collect();
+            if open.is_empty() {
+                break;
+            }
+            let left = room - (0..cols).filter(|c| fixed[*c]).map(|c| width[c]).sum::<f32>();
+            let share = left / open.len() as f32;
+            let small: Vec<usize> = open.iter().copied().filter(|c| natural[*c].max(least[*c]) <= share).collect();
+            if small.is_empty() {
+                for c in open {
+                    width[c] = share.max(least[c]).ceil();
+                }
+                break;
+            }
+            for c in small {
+                fixed[c] = true;
+                width[c] = natural[c].max(least[c]).ceil();
+            }
+        }
+    }
+    let total: f32 = width.iter().sum::<f32>() + gap * (cols as f32 - 1.0) + 2.0 * pad;
     ui.add_space(size * 0.2);
     egui::Frame::new().stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(6.0).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
         egui::ScrollArea::horizontal().id_salt(("md_table", id)).show(ui, |ui| {
-            egui::Grid::new(("md_grid", id)).striped(true).spacing([10.0, 4.0]).min_col_width(32.0).show(ui, |ui| {
-                for (k, row) in rows.iter().enumerate() {
-                    for c in 0..cols {
-                        let s = row.get(c).map(String::as_str).unwrap_or("");
-                        let layout = if numeric[c] && k > 0 { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
-                        ui.allocate_ui_with_layout(egui::vec2(width, size * 1.4), layout, |ui| {
-                            ui.set_max_width(width);
-                            ui.add(egui::Label::new(job(s, size - 0.5, if k == 0 { t.accent_text } else { t.text }, k == 0, t)).wrap());
-                        });
-                    }
-                    ui.end_row();
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for k in 0..rows.len() {
+                // the row as tall as its tallest cell, every cell drawn inside its own column
+                let galleys: Vec<_> = (0..cols).map(|c| ui.fonts(|f| f.layout_job(cell_job(k, c, width[c])))).collect();
+                let h = galleys.iter().map(|g| g.size().y).fold(size, f32::max) + 2.0 * pad;
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(total, h), egui::Sense::hover());
+                let p = ui.painter();
+                if k % 2 == 0 && k > 0 {
+                    p.rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
                 }
-            });
+                let mut x = rect.min.x + pad;
+                for (c, g) in galleys.into_iter().enumerate() {
+                    let dx = if numeric[c] && k > 0 { width[c] - g.size().x } else { 0.0 };
+                    p.galley(egui::pos2(x + dx, rect.min.y + pad), g, t.text);
+                    x += width[c] + gap;
+                }
+                if k == 0 {
+                    p.hline(rect.x_range(), rect.max.y, egui::Stroke::new(1.0, t.field_border));
+                }
+            }
         });
     });
     ui.add_space(size * 0.2);

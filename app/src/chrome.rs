@@ -414,13 +414,40 @@ pub fn object_row(ui: &mut egui::Ui, colour: Color32, icon: Option<Icon>, title:
             ui.painter().rect_filled(mark, 3.0, colour);
         }
     }
+    // the details keep at most 45 % of the row and the name the rest, each cut short with an
+    // ellipsis rather than drawn over the other
+    let (tfont, wfont) = (medium_font(13.0), FontId::proportional(11.5));
+    let (x0, x1) = (r.left() + 34.0, r.right() - 30.0);
+    let what = fit_text(ui, what, &wfont, ((x1 - x0) * 0.45).max(0.0));
+    let ww = ui.fonts(|f| f.layout_no_wrap(what.clone(), wfont.clone(), t.text_faint).size().x);
+    let title = fit_text(ui, title, &tfont, (x1 - x0 - ww - if ww > 0.0 { 12.0 } else { 0.0 }).max(0.0));
     let p = ui.painter();
-    p.text(Pos2::new(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, title, medium_font(13.0), t.text);
-    p.text(Pos2::new(r.right() - 30.0, r.center().y), Align2::RIGHT_CENTER, what, FontId::proportional(11.5), t.text_faint);
+    p.text(Pos2::new(x0, r.center().y), Align2::LEFT_CENTER, title, tfont, t.text);
+    p.text(Pos2::new(x1, r.center().y), Align2::RIGHT_CENTER, what, wfont, t.text_faint);
     let c = Pos2::new(r.right() - 15.0, r.center().y);
     let chevron = if selected { [c + Vec2::new(-4.0, -2.0), c + Vec2::new(0.0, 2.0), c + Vec2::new(4.0, -2.0)] } else { [c + Vec2::new(-2.0, -4.0), c + Vec2::new(2.0, 0.0), c + Vec2::new(-2.0, 4.0)] };
     p.add(Shape::line(chevron.to_vec(), Stroke::new(1.5_f32, t.text_dim)));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// `s` as it fits in `max` points of width: whole, or cut short with an ellipsis.
+pub fn fit_text(ui: &egui::Ui, s: &str, font: &FontId, max: f32) -> String {
+    let w = |x: &str| ui.fonts(|f| f.layout_no_wrap(x.to_string(), font.clone(), Color32::WHITE).size().x);
+    if w(s) <= max {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let cand: String = chars[..mid].iter().collect::<String>().trim_end().to_string() + "…";
+        if w(&cand) <= max {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo == 0 { String::new() } else { chars[..lo].iter().collect::<String>().trim_end().to_string() + "…" }
 }
 
 /// The card the selected object's fields open in, under its row.
