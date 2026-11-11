@@ -123,10 +123,16 @@ impl StandardsView {
                         }
                         changed = true;
                     }
+                    // the text keeps clear of Browse and ×, and says how the standard is indexed
+                    let room = (ui.available_width() - 130.0).max(60.0);
+                    let how = if m.embedder.starts_with("hashed") { "simple search".to_string() } else { m.embedder.trim_start_matches("api:").split('@').next().unwrap_or(&m.embedder).to_string() };
+                    let name = if m.name.trim().is_empty() { String::new() } else { format!("{} · ", m.name.trim()) };
+                    let line = format!("{name}{} · {} pieces · {how}", m.discipline, m.chunks);
                     ui.vertical(|ui| {
+                        ui.set_max_width(room);
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(RichText::new(&m.code).font(medium_font(13.0)));
-                        ui.label(RichText::new(format!("{} · {} · {} pieces", m.name, m.discipline, m.chunks)).size(11.5).color(t.text_dim));
+                        ui.label(RichText::new(chrome::fit_text(ui, &m.code, &medium_font(13.0), room)).font(medium_font(13.0))).on_hover_text(&m.code);
+                        ui.label(RichText::new(chrome::fit_text(ui, &line, &egui::FontId::proportional(11.5), room)).size(11.5).color(t.text_dim)).on_hover_text(&line);
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if chrome::remove_button(ui, "Delete from the library").clicked() {
@@ -149,6 +155,7 @@ impl StandardsView {
         // standards indexed with another method than the current setting
         let want = embedder.signature();
         let other: Vec<String> = self.list.iter().filter(|m| m.embedder != want).map(|m| m.id.clone()).collect();
+        let all_current = other.is_empty();
         if !other.is_empty() {
             let how = if embedder.is_openrouter() { "the OpenRouter embedding model" } else { "the simple built-in method" };
             chrome::hint(ui, &format!("{} standard(s) were indexed another way than the current setting ({how}). Re-index them so that search uses it.", other.len()));
@@ -177,6 +184,13 @@ impl StandardsView {
                     });
                 }
             });
+        }
+        if all_current && !self.list.is_empty() {
+            let how = match embedder {
+                EmbedderConfig::Hashed { .. } => "simple search (words and clause numbers)".to_string(),
+                EmbedderConfig::Api { model, .. } => format!("the embedding model {model}"),
+            };
+            chrome::hint(ui, &format!("Searched with {how}. Change it under Settings › Standards search, then re-index here."));
         }
         if self.import_rx.is_some() && !self.show_import {
             ui.add(egui::ProgressBar::new(self.progress.0).text(&self.progress.1));
