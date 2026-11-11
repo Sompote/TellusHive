@@ -34,10 +34,62 @@ pub fn clean_chars(s: &str) -> String {
             '\u{00A0}' | '\u{2002}' | '\u{2003}' | '\u{2009}' | '\u{202F}' => out.push(' '),
             '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2212}' => out.push('-'),
             '\r' => {}
-            _ => out.push(c),
+            _ => match legacy_char(c) {
+                Some(r) => out.push(r),
+                None => out.push(c),
+            },
         }
     }
     out
+}
+
+/// A character that a PDF's text layer gives in a legacy private-use form, as the character it
+/// stands for. Thai fonts made for Windows keep the positioned forms of the marks (a tone mark
+/// lowered or moved left, ฐ and ญ without their tails) at U+F700..U+F71A, and the Symbol font
+/// sits at U+F020..U+F0FF; extracted as they are, they show as boxes and are never found by a
+/// search.
+pub fn legacy_char(c: char) -> Option<char> {
+    const THAI: [char; 27] = [
+        '\u{0E10}', '\u{0E34}', '\u{0E35}', '\u{0E36}', '\u{0E37}', '\u{0E48}', '\u{0E49}', '\u{0E4A}', '\u{0E4B}', '\u{0E4C}',
+        '\u{0E48}', '\u{0E49}', '\u{0E4A}', '\u{0E4B}', '\u{0E4C}', '\u{0E0D}', '\u{0E31}', '\u{0E4D}', '\u{0E47}', '\u{0E48}',
+        '\u{0E49}', '\u{0E4A}', '\u{0E4B}', '\u{0E4C}', '\u{0E38}', '\u{0E39}', '\u{0E3A}',
+    ];
+    let o = c as u32;
+    match o {
+        0xF700..=0xF71A => Some(THAI[(o - 0xF700) as usize]),
+        // Symbol font: the signs engineering text uses
+        0xF0B0 => Some('°'),
+        0xF0B1 => Some('±'),
+        0xF0A3 => Some('≤'),
+        0xF0B3 => Some('≥'),
+        0xF0B4 | 0xF0D7 => Some('×'),
+        0xF0B8 => Some('÷'),
+        0xF0A5 => Some('∞'),
+        0xF0D6 => Some('√'),
+        0xF0B9 => Some('≠'),
+        0xF0BB => Some('≈'),
+        0xF0E5 => Some('Σ'),
+        0xF061 => Some('α'),
+        0xF062 => Some('β'),
+        0xF067 => Some('γ'),
+        0xF066 => Some('φ'),
+        0xF073 => Some('σ'),
+        0xF074 => Some('τ'),
+        0xF06D => Some('μ'),
+        0xF044 => Some('Δ'),
+        0xF071 => Some('θ'),
+        0xF072 => Some('ρ'),
+        0xF065 => Some('ε'),
+        0xF06C => Some('λ'),
+        0xF070 => Some('π'),
+        0xF020 => Some(' '),
+        _ => None,
+    }
+}
+
+/// Whether `s` has characters that [`legacy_char`] repairs.
+pub fn has_legacy(s: &str) -> bool {
+    s.chars().any(|c| legacy_char(c).is_some())
 }
 
 fn is_thai(c: char) -> bool {
@@ -166,6 +218,17 @@ mod tests {
         assert!(t.contains(&"av".to_string()));
         assert!(t.contains(&"0.062".to_string()));
         assert!(t.contains(&"mpa".to_string()));
+    }
+    /// Positioned Thai marks from Windows fonts become the real marks: "ค่าอัตราส่วน ...
+    /// ไม่น้อยกว่า" as a 2566 foundation regulation's PDF gives it.
+    #[test]
+    fn legacy_thai_marks() {
+        let pdf = "ค\u{F70A}าอัตราส\u{F70A}วน ไม\u{F70A}น\u{F70B}อยกว\u{F70A}า 3.00 \u{F0B0}C";
+        assert_eq!(clean_chars(pdf), "ค่าอัตราส่วน ไม่น้อยกว่า 3.00 °C");
+        assert!(has_legacy(pdf) && !has_legacy(&clean_chars(pdf)));
+        assert_eq!(legacy_char('\u{F700}'), Some('ฐ'));
+        assert_eq!(legacy_char('\u{F71A}'), Some('\u{0E3A}'));
+        assert_eq!(legacy_char('ก'), None);
     }
     #[test]
     fn thai_bigrams() {

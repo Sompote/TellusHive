@@ -149,6 +149,15 @@ impl App {
     pub fn new(cc: &eframe::CreationContext) -> Result<App, String> {
         let settings = Settings::load();
         let library = Arc::new(th_kb::Library::open(&th_kb::Library::default_root())?);
+        // standards indexed before legacy Thai and Symbol characters were mapped are cleaned once
+        {
+            let lib = library.clone();
+            std::thread::spawn(move || {
+                for code in lib.repair_text() {
+                    eprintln!("standards: repaired the text of {code}");
+                }
+            });
+        }
         let had_project = read_json::<AppState>(&state_path()).map(|s| !s.last_project.is_empty()).unwrap_or(false);
         let project = default_project(&settings)?;
         let team = TeamSpec::load(&project.info.team);

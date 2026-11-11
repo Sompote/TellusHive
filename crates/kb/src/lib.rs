@@ -385,6 +385,38 @@ impl Library {
         Ok(meta)
     }
 
+    /// Repairs standards indexed before legacy private-use characters were mapped (Thai tone
+    /// marks from Windows fonts shown as boxes, Symbol-font signs): their text is cleaned and
+    /// embedded again with the standard's own embedder. Returns the codes repaired.
+    pub fn repair_text(&self) -> Vec<String> {
+        let mut done = vec![];
+        for m in self.list() {
+            let Ok(e) = self.load(&m.id) else { continue };
+            if !e.chunks.iter().any(|c| text::has_legacy(&c.text) || text::has_legacy(&c.title) || text::has_legacy(&c.context)) {
+                continue;
+            }
+            let Ok(_w) = self.write.lock() else { continue };
+            let items: Vec<(Chunk, Option<Vec<f32>>)> = e
+                .chunks
+                .iter()
+                .map(|c| {
+                    let mut c = c.clone();
+                    c.text = text::clean_chars(&c.text);
+                    c.title = text::clean_chars(&c.title);
+                    c.context = text::clean_chars(&c.context);
+                    (c, None)
+                })
+                .collect();
+            let (meta, cfg) = (e.meta.clone(), e.emb.config.clone());
+            drop(e);
+            match self.write_standard(&meta, &cfg, items, &mut |_, _| {}) {
+                Ok(_) => done.push(meta.code),
+                Err(err) => eprintln!("th-kb: could not repair the text of {}: {err}", meta.code),
+            }
+        }
+        done
+    }
+
     /// Embed an existing standard again with `embedder` (after the embedding setting changed),
     /// keeping its chunks and notes; no file is read again.
     pub fn reindex(&self, standard_id: &str, embedder: &EmbedderConfig, progress: &mut dyn FnMut(f32, &str)) -> Result<StandardMeta, String> {
