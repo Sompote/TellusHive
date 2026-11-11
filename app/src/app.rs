@@ -954,6 +954,9 @@ impl App {
         if changed {
             self.apply_settings();
         }
+        if self.set_view.take_skills_changed() {
+            self.engine.rescan_skills();
+        }
     }
 
     // ---------------------------------------------------------------- home

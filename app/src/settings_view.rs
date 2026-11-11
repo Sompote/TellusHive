@@ -18,7 +18,7 @@ const SECTIONS: [(Icon, &str, &str); 5] = [
     (Icon::Chat, "Models", "Which language model each agent uses, and the API keys"),
     (Icon::Library, "Standards search", "How the standards library is indexed"),
     (Icon::Edit, "Claude Code & Codex", "Coding agents the coordinator can hand work to"),
-    (Icon::Book, "Skills", "Folders of skills (SKILL.md) agents can be equipped with"),
+    (Icon::Book, "Skills", "The skills agents can be equipped with: add, write or remove them"),
     (Icon::Settings, "General", "Projects folder and appearance"),
 ];
 
@@ -29,6 +29,11 @@ pub struct SettingsView {
     models_rx: Option<Receiver<(String, Result<Vec<String>, String>)>>,
     claude_args: Option<String>,
     codex_args: Option<String>,
+    skills: Option<Vec<th_harness::skills::Skill>>,
+    skills_changed: bool,
+    skill_msg: String,
+    new_skill_open: bool,
+    new_skill: (String, String, String),
 }
 
 fn group(ui: &mut egui::Ui, title: &str, context: &str, add: impl FnOnce(&mut egui::Ui)) {
@@ -85,7 +90,7 @@ impl SettingsView {
                 0 => self.models_ui(ui, s),
                 1 => embed_ui(ui, s),
                 2 => self.external_ui(ui, s),
-                3 => skills_ui(ui, s),
+                3 => self.skills_ui(ui, s),
                 _ => general_ui(ui, s),
             }
             ui.add_space(24.0);
@@ -243,7 +248,7 @@ fn embed_ui(ui: &mut egui::Ui, s: &mut Settings) {
     });
 }
 
-fn skills_ui(ui: &mut egui::Ui, s: &mut Settings) {
+fn skill_folders_ui(ui: &mut egui::Ui, s: &mut Settings) {
     group(ui, "Skill folders", "each holds skill folders with SKILL.md", |ui| {
         let mut remove = None;
         for (i, d) in s.skill_dirs.iter_mut().enumerate() {
@@ -264,6 +269,109 @@ fn skills_ui(ui: &mut egui::Ui, s: &mut Settings) {
         }
         chrome::hint(ui, "The Claude skills format: a folder per skill with SKILL.md (front matter name and description) and its reference files. ~/.claude/skills is read by default.");
     });
+}
+
+impl SettingsView {
+    /// The skills found, adding one (a folder, its SKILL.md, or a .skill / .zip file), writing a
+    /// new one, and removing those in TellusHive's own folder.
+    fn skills_ui(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
+        let t = tokens(ui);
+        let own = th_harness::skills::own_dir();
+        if self.skills.is_none() {
+            self.skills = Some(th_harness::skills::scan(&s.skill_dirs));
+        }
+        let mut changed = false;
+        group(ui, "Skills", &format!("{} found", self.skills.as_ref().map_or(0, Vec::len)), |ui| {
+            let list = self.skills.clone().unwrap_or_default();
+            if list.is_empty() {
+                chrome::hint(ui, "No skills yet. Add one below, or write a new one.");
+            }
+            for k in &list {
+                ui.horizontal(|ui| {
+                    let room = (ui.available_width() - 40.0).max(80.0);
+                    let mine = k.dir.parent().zip(own.canonicalize().ok()).is_some_and(|(p, o)| p.canonicalize().ok().as_deref() == Some(o.as_path()));
+                    ui.vertical(|ui| {
+                        ui.set_max_width(room);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new(chrome::fit_text(ui, &k.name, &medium_font(13.0), room)).font(medium_font(13.0)));
+                        let where_ = if mine { "TellusHive".to_string() } else { k.dir.parent().map(|p| p.display().to_string()).unwrap_or_default() };
+                        let line = format!("{} · {where_}", k.description);
+                        ui.label(RichText::new(chrome::fit_text(ui, &line, &egui::FontId::proportional(11.5), room)).size(11.5).color(t.text_dim)).on_hover_text(format!("{}\n{}", k.description, k.dir.display()));
+                    });
+                    if mine {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if chrome::remove_button(ui, "Remove this skill").clicked() {
+                                self.skill_msg = match th_harness::skills::remove(k, &own) {
+                                    Ok(()) => format!("Removed '{}'.", k.name),
+                                    Err(e) => e,
+                                };
+                                changed = true;
+                            }
+                        });
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let mut picked: Option<std::path::PathBuf> = None;
+                if chrome::ghost_button(ui, "+ Add skill folder…").on_hover_text("A folder with SKILL.md and its reference files").clicked() {
+                    picked = rfd::FileDialog::new().pick_folder();
+                }
+                if chrome::ghost_button(ui, "+ Add .skill or .zip file…").clicked() {
+                    picked = rfd::FileDialog::new().add_filter("Skill", &["skill", "zip", "md"]).pick_file();
+                }
+                if chrome::ghost_button(ui, "+ New skill").clicked() {
+                    self.new_skill_open = !self.new_skill_open;
+                }
+                if let Some(p) = picked {
+                    let mut r = th_harness::skills::install(&p, &own, false);
+                    if matches!(&r, Err(e) if e.contains("already installed")) {
+                        r = th_harness::skills::install(&p, &own, true).map(|k| th_harness::skills::Skill { name: format!("{} (replaced)", k.name), ..k });
+                    }
+                    self.skill_msg = match r {
+                        Ok(k) => format!("Added '{}'. Equip it to agents in step 3 Team, or leave their skills on 'all'.", k.name),
+                        Err(e) => format!("Not added: {e}"),
+                    };
+                    changed = true;
+                }
+            });
+            if self.new_skill_open {
+                ui.add_space(6.0);
+                chrome::field(ui, "Name", &mut self.new_skill.0);
+                chrome::field(ui, "Description", &mut self.new_skill.1).on_hover_text("One sentence saying when to use it: agents choose skills by this line");
+                ui.add(egui::TextEdit::multiline(&mut self.new_skill.2).hint_text("Instructions: the method, the clauses to follow, the checks to make, the output to give").desired_rows(6).desired_width(f32::INFINITY));
+                if ui.add(chrome::primary_button("Create skill")).clicked() {
+                    self.skill_msg = match th_harness::skills::create(&own, &self.new_skill.0, &self.new_skill.1, &self.new_skill.2) {
+                        Ok(k) => {
+                            self.new_skill = Default::default();
+                            self.new_skill_open = false;
+                            format!("Created '{}' in {}.", k.name, k.dir.display())
+                        }
+                        Err(e) => e,
+                    };
+                    changed = true;
+                }
+            }
+            if !self.skill_msg.is_empty() {
+                ui.label(RichText::new(&self.skill_msg).size(12.0).color(t.text_dim));
+            }
+            chrome::hint(ui, "Skills are added to TellusHive's own skills folder; those in other folders, such as ~/.claude/skills, are used but not changed here.");
+        });
+        if changed {
+            if !s.skill_dirs.iter().any(|d| std::path::Path::new(d) == own.as_path()) {
+                s.skill_dirs.insert(0, own.display().to_string());
+            }
+            self.skills = None;
+            self.skills_changed = true;
+        }
+        skill_folders_ui(ui, s);
+    }
+
+    /// True once after skills were added or removed, so the app rescans them.
+    pub fn take_skills_changed(&mut self) -> bool {
+        std::mem::take(&mut self.skills_changed)
+    }
 }
 
 fn general_ui(ui: &mut egui::Ui, s: &mut Settings) {
