@@ -115,6 +115,23 @@ impl Drawing {
     }
     /// Annotation size (dimension text height) scaled to the geometry, so dimensions read the
     /// same whether the drawing is in mm or m.
+    /// Dimension text height: the median height of the drawing's own text, so dimensions read
+    /// at the size of the labels beside them; without any text, the annotation size.
+    fn text_h(&self) -> f64 {
+        let mut h: Vec<f64> = self
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                Entity::Text { height, .. } if *height > 0.0 && height.is_finite() => Some(*height),
+                _ => None,
+            })
+            .collect();
+        if h.is_empty() {
+            return self.anno();
+        }
+        h.sort_by(|a, b| a.total_cmp(b));
+        h[h.len() / 2]
+    }
     fn anno(&self) -> f64 {
         let mut b = Bounds::new();
         for e in &self.entities {
@@ -362,10 +379,10 @@ fn xml(s: &str) -> String {
 /// title strip at the bottom, hatches as patterns and one `<g>` per layer.
 pub fn to_svg(d: &Drawing, width_px: u32) -> String {
     let wpx = width_px.max(200) as f64;
-    let anno = d.anno();
+    let th = d.text_h();
     let mut b = Bounds::new();
     for e in &d.entities {
-        entity_bounds(e, anno, &mut b);
+        entity_bounds(e, th, &mut b);
     }
     if !b.valid() {
         b = Bounds { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 };
@@ -494,7 +511,7 @@ pub fn to_svg(d: &Drawing, width_px: u32) -> String {
                     );
                 }
                 Entity::Dim { .. } => {
-                    let Some(g) = dim_geometry(e, anno, d.units()) else { continue };
+                    let Some(g) = dim_geometry(e, th, d.units()) else { continue };
                     let dw = (lw * 0.6).max(0.6);
                     for (p, q) in &g.lines {
                         let (x1, y1) = px(*p);
@@ -687,7 +704,7 @@ impl Dxf {
         if rot != 0.0 {
             self.f(50, rot);
         }
-        self.g(7, "STANDARD");
+        self.g(7, if s.chars().any(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c)) { "THAI" } else { "STANDARD" });
         if just != 0 {
             self.i(72, just);
             self.xy(11, at);
@@ -722,9 +739,10 @@ impl Dxf {
 /// is a circle plus a donut (a wide two-bulge polyline), the R12 way of filling a disc.
 pub fn to_dxf(d: &Drawing) -> String {
     let anno = d.anno();
+    let th = d.text_h();
     let mut b = Bounds::new();
     for e in &d.entities {
-        entity_bounds(e, anno, &mut b);
+        entity_bounds(e, th, &mut b);
     }
     if !b.valid() {
         b = Bounds { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 };
@@ -764,7 +782,7 @@ pub fn to_dxf(d: &Drawing) -> String {
     x.f(10, b.x1);
     x.f(20, b.y1);
     x.g(9, "$TEXTSIZE");
-    x.f(40, anno);
+    x.f(40, th);
     x.g(0, "ENDSEC");
 
     x.g(0, "SECTION");
@@ -793,17 +811,21 @@ pub fn to_dxf(d: &Drawing) -> String {
     x.g(0, "ENDTAB");
     x.g(0, "TABLE");
     x.g(2, "STYLE");
-    x.i(70, 1);
-    x.g(0, "STYLE");
-    x.g(2, "STANDARD");
-    x.i(70, 0);
-    x.f(40, 0.0);
-    x.f(41, 1.0);
-    x.f(50, 0.0);
-    x.i(71, 0);
-    x.f(42, anno);
-    x.g(3, "txt");
-    x.g(4, "");
+    x.i(70, 2);
+    // TrueType fonts that AutoCAD and CADCraft both find on macOS and Windows, rather than
+    // the txt.shx shape font, which CADCraft has to substitute; Tahoma carries Thai
+    for (name, font) in [("STANDARD", "arial.ttf"), ("THAI", "tahoma.ttf")] {
+        x.g(0, "STYLE");
+        x.g(2, name);
+        x.i(70, 0);
+        x.f(40, 0.0);
+        x.f(41, 1.0);
+        x.f(50, 0.0);
+        x.i(71, 0);
+        x.f(42, th);
+        x.g(3, font);
+        x.g(4, "");
+    }
     x.g(0, "ENDTAB");
     x.g(0, "ENDSEC");
 
@@ -863,7 +885,7 @@ pub fn to_dxf(d: &Drawing) -> String {
                 x.text(&layer, *at, *height, text, 0.0, j);
             }
             Entity::Dim { .. } => {
-                if let Some(g) = dim_geometry(e, anno, d.units()) {
+                if let Some(g) = dim_geometry(e, th, d.units()) {
                     for (p, q) in &g.lines {
                         x.line(&layer, *p, *q);
                     }
