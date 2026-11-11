@@ -19,6 +19,8 @@ pub struct Ctx<'a> {
     pub library: &'a Library,
     pub skills: &'a [Skill],
     pub settings: &'a Settings,
+    /// Stop: a running script is ended when it is set.
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -582,6 +584,13 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
             let _ = child.wait();
             break None;
         }
+        if ctx.cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = out_t.join();
+            let _ = err_t.join();
+            return Err("cancelled".into());
+        }
         std::thread::sleep(Duration::from_millis(50));
     };
     let stdout = out_t.join().unwrap_or_default();
@@ -638,7 +647,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("adpy_{}", std::process::id()));
         let project = Project::create(&d, crate::project::ProjectInfo::default()).unwrap();
         let library = Library::open(&d.join("kb")).unwrap();
-        let ctx = Ctx { project: &project, library: &library, skills: &[], settings: &settings };
+        let ctx = Ctx { project: &project, library: &library, skills: &[], settings: &settings, cancel: None };
 
         let ok = exec_builtin(&ctx, "run_python", &json!({"code": "import sys\nq = 2.0*9.81\nprint(f'q = {q:.2f} kPa', sys.argv[1])\nopen('out.csv','w').write('a,b\\n1,2\\n')", "name": "t1", "args": ["x"]})).unwrap();
         assert!(ok.text.contains("q = 19.62 kPa x"), "{}", ok.text);
@@ -648,6 +657,20 @@ mod tests {
         let bad = exec_builtin(&ctx, "run_python", &json!({"code": "raise ValueError('boom')"})).unwrap_err();
         assert!(bad.contains("FAILED") && bad.contains("boom"), "{bad}");
 
+        // Stop ends a running script at once, not at its time limit
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let stopped = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            let c2 = Ctx { cancel: Some(&stop), ..ctx };
+            let t0 = std::time::Instant::now();
+            let r = exec_builtin(&c2, "run_python", &json!({"code": "import time\ntime.sleep(60)", "timeout_s": 300}));
+            (r.map(|o| o.text), t0.elapsed())
+        });
+        assert_eq!(stopped.0.unwrap_err(), "cancelled");
+        assert!(stopped.1 < std::time::Duration::from_secs(5), "took {:?}", stopped.1);
         let slow = exec_builtin(&ctx, "run_python", &json!({"code": "import time\ntime.sleep(30)", "timeout_s": 5})).unwrap_err();
         assert!(slow.contains("time limit"), "{slow}");
         let _ = std::fs::remove_dir_all(&d);

@@ -437,7 +437,7 @@ impl App {
                         if tp + tc > 0 && self.chat.saved.details {
                             ui.label(RichText::new(format!("{} tokens", crate::chat::fmt_tokens(tp + tc))).monospace().color(t.text_dim)).on_hover_text(self.chat.run_usage.table());
                         }
-                        if ui.add(egui::Button::new(RichText::new("Stop").color(t.error)).frame(false)).on_hover_text("Stops the agents after the current call").clicked() {
+                        if ui.add(egui::Button::new(RichText::new("Stop").color(t.error)).frame(false)).on_hover_text("Stops the agents now, including a running program calculation or script").clicked() {
                             self.chat.stop();
                         }
                         if ui.add(egui::Button::new("Watch").frame(false)).clicked() {

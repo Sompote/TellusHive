@@ -114,7 +114,7 @@ pub fn serve_mcp(project_dir: &Path) -> Result<(), String> {
             th_mcp::ServedTool {
                 info: th_mcp::ToolInfo { name: spec.name, description: spec.description, input_schema: spec.parameters },
                 run: Box::new(move |args| {
-                    let ctx = tools::Ctx { project: &p, library: &l, skills: &s, settings: &st };
+                    let ctx = tools::Ctx { project: &p, library: &l, skills: &s, settings: &st, cancel: None };
                     tools::exec_builtin(&ctx, &name, &args).map(|o| o.text)
                 }),
             }

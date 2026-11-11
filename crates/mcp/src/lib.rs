@@ -7,9 +7,10 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -147,8 +148,24 @@ impl Client {
     }
 
     pub fn call(&self, tool: &str, args: Value) -> Result<CallResult, String> {
-        let r = self.request("tools/call", json!({"name": tool, "arguments": args}), self.config.timeout())?;
+        self.call_until(tool, args, None)
+    }
+
+    /// A tool call that `cancel` can interrupt: the server is told (MCP
+    /// `notifications/cancelled`) and given a few seconds to answer; a stdio server that
+    /// still has not answered is ended, because it would go on with the work and hold up
+    /// every later call. The error is then "cancelled".
+    pub fn call_until(&self, tool: &str, args: Value, cancel: Option<&AtomicBool>) -> Result<CallResult, String> {
+        let r = self.request_until("tools/call", json!({"name": tool, "arguments": args}), self.config.timeout(), cancel)?;
         Ok(parse_call_result(&r))
+    }
+
+    /// Whether the server is still running (an HTTP server is taken to be).
+    pub fn is_alive(&self) -> bool {
+        match &mut *self.transport.lock().unwrap_or_else(|e| e.into_inner()) {
+            Transport::Stdio { child, .. } => matches!(child.try_wait(), Ok(None)),
+            Transport::Http { .. } => true,
+        }
     }
 
     fn id(&self) -> u64 {
@@ -170,6 +187,10 @@ impl Client {
     }
 
     fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+        self.request_until(method, params, timeout, None)
+    }
+
+    fn request_until(&self, method: &str, params: Value, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<Value, String> {
         let id = self.id();
         let msg = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let rx: Receiver<Value>;
@@ -192,8 +213,45 @@ impl Client {
                 }
             }
         }
-        let v = rx.recv_timeout(timeout).map_err(|_| format!("{method}: no reply from '{}' within {} s", self.config.name, timeout.as_secs()))?;
+        let stopped = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+        let t0 = Instant::now();
+        let v = loop {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(v) => break v,
+                Err(RecvTimeoutError::Disconnected) => return Err(format!("{method}: '{}' closed the connection", self.config.name)),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            if stopped() {
+                let _ = self.notify("notifications/cancelled", json!({"requestId": id, "reason": "stopped by the engineer"}));
+                if rx.recv_timeout(Duration::from_secs(3)).is_err() {
+                    self.forget(id);
+                    self.kill();
+                }
+                return Err("cancelled".into());
+            }
+            if t0.elapsed() >= timeout {
+                self.forget(id);
+                return Err(format!("{method}: no reply from '{}' within {} s", self.config.name, timeout.as_secs()));
+            }
+        };
         unwrap_rpc(v, method)
+    }
+
+    /// Drops the reply slot of a request no one waits for any more.
+    fn forget(&self, id: u64) {
+        if let Transport::Stdio { pending, .. } = &*self.transport.lock().unwrap_or_else(|e| e.into_inner()) {
+            if let Ok(mut p) = pending.lock() {
+                p.remove(&id);
+            }
+        }
+    }
+
+    /// Ends a stdio server (its later calls then fail, and the caller starts a new one).
+    fn kill(&self) {
+        if let Transport::Stdio { child, .. } = &mut *self.transport.lock().unwrap_or_else(|e| e.into_inner()) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     /// The server's stderr so far (stdio only), for the plugin panel.
@@ -376,6 +434,33 @@ mod tests {
         assert_eq!(r.text, "a\nb");
         assert_eq!(r.images.len(), 1);
         assert!(!r.is_error);
+    }
+
+    /// Stop interrupts a long tool call: a server that goes on calculating and ignores the
+    /// cancel notice is ended within a few seconds, not after its 30-minute timeout.
+    #[test]
+    fn stop_interrupts_a_long_call() {
+        let script = r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *initialize*) printf '{"jsonrpc":"2.0","id":%s,"result":{"serverInfo":{"name":"slow"},"capabilities":{}}}\n' "$id";;
+    *tools/list*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"calculate","description":"c","inputSchema":{"type":"object"}}]}}\n' "$id";;
+    *tools/call*) sleep 120;;
+  esac
+done"#;
+        let cfg = ServerConfig { name: "slow".into(), command: "sh".into(), args: vec!["-c".into(), script.into()], enabled: true, timeout_s: 1800, ..Default::default() };
+        let c = Client::connect(&cfg).unwrap();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let s2 = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            s2.store(true, Ordering::Relaxed);
+        });
+        let t0 = Instant::now();
+        let e = c.call_until("calculate", json!({}), Some(&stop)).unwrap_err();
+        assert_eq!(e, "cancelled");
+        assert!(t0.elapsed() < Duration::from_secs(6), "took {:?}", t0.elapsed());
+        assert!(!c.is_alive(), "a server that ignores the cancel notice is ended");
     }
 
     /// Talks to a tiny shell-script server to prove the stdio framing.

@@ -109,7 +109,8 @@ impl Plugins {
         let live = live::spec(name).filter(|_| project.is_some());
         let bound = self.bound.lock().ok().and_then(|b| b.get(name).cloned());
         if let Some(c) = self.get(name) {
-            if live.is_none() || bound.as_deref() == project {
+            // a program that has ended (stopped by the engineer, or crashed) is started again
+            if c.is_alive() && (live.is_none() || bound.as_deref() == project) {
                 return Ok(c);
             }
             self.disconnect(name);
@@ -228,11 +229,21 @@ impl Domain {
 
     /// Calls one plugin tool. Pictures it returns are saved to images/; a live model the
     /// program saved is reported in `meta`.
-    pub fn call_plugin(&self, server: &str, tool: &str, args: Value) -> Result<ToolOutput, String> {
+    /// Stop (`cancel`) interrupts the call; a program that had to be ended for it is dropped,
+    /// so the next call starts it again with the project's saved model.
+    pub fn call_plugin(&self, server: &str, tool: &str, args: Value, cancel: Option<&AtomicBool>) -> Result<ToolOutput, String> {
         let settings = self.settings();
         let project = self.project();
         let c = self.plugins.ensure_for(&settings, server, Some(&project.dir))?;
-        let r = c.call(tool, args)?;
+        let r = match c.call_until(tool, args, cancel) {
+            Ok(r) => r,
+            Err(e) => {
+                if !c.is_alive() {
+                    self.plugins.disconnect(server);
+                }
+                return Err(e);
+            }
+        };
         let mut meta = json!({});
         if !r.is_error {
             if let Some(m) = Plugins::keep_model(&c, server, tool, &project.dir) {

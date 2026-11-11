@@ -108,9 +108,9 @@ impl Plugin for BuiltinTools {
         for spec in tools::builtin_specs() {
             let d = dom.clone();
             let name = spec.name.clone();
-            let mut def = ToolDef::new(&spec.name, &spec.description, spec.parameters.clone(), move |_, args: Value| {
+            let mut def = ToolDef::new(&spec.name, &spec.description, spec.parameters.clone(), move |t, args: Value| {
                 let (settings, project, skills) = (d.settings(), d.project(), d.skills());
-                let c = tools::Ctx { project: &project, library: &d.library, skills: &skills, settings: &settings };
+                let c = tools::Ctx { project: &project, library: &d.library, skills: &skills, settings: &settings, cancel: Some(&t.agent.cancel) };
                 let out = tools::exec_builtin(&c, &name, &args)?;
                 Ok(ToolOutput { text: out.text, meta: artifacts_meta(&out.artifacts), ..Default::default() })
             });
@@ -163,7 +163,7 @@ struct Reported(HashSet<String>);
 
 fn plugin_tool(d: &Arc<Domain>, server: &str, tool: &str, name: String, description: String, schema: Value) -> ToolDef {
     let (d, server, tool) = (d.clone(), server.to_string(), tool.to_string());
-    ToolDef::new(&name, &description, schema, move |_, args| d.call_plugin(&server, &tool, args))
+    ToolDef::new(&name, &description, schema, move |t, args| d.call_plugin(&server, &tool, args, Some(&t.agent.cancel)))
 }
 
 fn gateway_tools(d: &Arc<Domain>, gateway: Vec<String>) -> Vec<Arc<ToolDef>> {
@@ -194,7 +194,7 @@ fn gateway_tools(d: &Arc<Domain>, gateway: Vec<String>) -> Vec<Arc<ToolDef>> {
         "plugin_call",
         &format!("Runs one tool of a plugin that is not listed directly ({list}). Get the tool's argument schema with plugin_tools first."),
         json!({"type":"object","properties":{"plugin":{"type":"string","enum":gateway},"tool":{"type":"string"},"arguments":{"type":"object","description":"The tool's arguments, as its schema describes"}},"required":["plugin","tool"]}),
-        move |_, a| {
+        move |t, a| {
             let server = a.get("plugin").and_then(|v| v.as_str()).ok_or("missing 'plugin'")?;
             if !g2.iter().any(|g| g == server) {
                 return Err(format!("'{server}' is not one of this agent's gateway plugins ({})", g2.join(", ")));
@@ -205,7 +205,7 @@ fn gateway_tools(d: &Arc<Domain>, gateway: Vec<String>) -> Vec<Arc<ToolDef>> {
                 return Err(format!("{server} has no tool '{tool}'; list them with plugin_tools"));
             }
             let targs = a.get("arguments").cloned().filter(|v| v.is_object()).unwrap_or_else(|| json!({}));
-            d2.call_plugin(server, tool, targs)
+            d2.call_plugin(server, tool, targs, Some(&t.agent.cancel))
         },
     );
     vec![Arc::new(lister), Arc::new(caller)]
