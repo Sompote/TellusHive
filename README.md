@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.3 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.3):
+Version 0.1.4 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.4):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.3-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.3/TellusHive-0.1.3-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.3-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.3/TellusHive-0.1.3-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.4-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.4/TellusHive-0.1.4-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.4-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.4/TellusHive-0.1.4-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,22 +32,25 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.3
+### What is new in 0.1.4
+
+The geotechnical analyst now runs TellusLEM for slope stability by limit equilibrium, so a slope,
+cut or embankment gets its factor of safety by Morgenstern-Price with Bishop and Spencer as
+cross-checks and a full search of circular and non-circular slip surfaces, while Tellus confirms
+a critical slope by phi-c reduction and gives the deformations. TellusHive finds TellusLEM in
+Applications, in its build folder or in its packaged app. Drawings also read better in CAD,
+because dimension text now takes the height of the labels beside it instead of about twice that,
+and the DXF text styles use Arial (and Tahoma for Thai) rather than the txt.shx shape font, which
+CADCraft had to replace on every open. **Stop** now stops at once, including a program
+calculation or a script that is running, instead of waiting for it to finish.
 
 The team keeps to the work the engineer asks for, so a slope, excavation or embankment analysis
-goes to the geotechnical analyst alone and no longer starts the BIM modeller or the structural
-analyst, while any further deliverable is offered in the answer instead of being made unasked.
-When the engineer does ask for a model of the ground, the BIM modeller builds it as terrain in
-Aedifex rather than inventing a building, either as a graded cut or fill slope (the cross-section
-with its berms swept along an alignment) or as a surface from survey points or contours. This
-needs an Aedifex build with the terrain tools `add_graded_slope` and `add_topography`, because
-TellusHive starts the Aedifex that **4 Plugins** points to and an older one lacks them.
-
-A team and settings saved by an earlier version now take up the new built-in texts on their own,
-because any agent role, instruction or plugin description that is still word for word an earlier
-default is replaced with the current one, whereas a text you edited is kept. If you changed the
-Coordinator or the BIM modeller yourself, choose **Reset to the default design office** in step
-**3 Team** to get the new wording, then add your changes again.
+does not start the BIM modeller or the structural analyst unless a model is asked for. When it
+is, the BIM modeller builds the ground as terrain in Aedifex with `add_graded_slope` or
+`add_topography`, which needs an Aedifex build with those tools. A team and settings saved by an
+earlier version take up new built-in texts and plugin lists on their own, whereas any text or
+list you changed is kept, so if you edited an agent yourself, choose **Reset to the default
+design office** in step **3 Team** to get the new wording, then add your changes again.
 
 ## How to use
 
@@ -118,7 +121,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 84 tests, no API key needed
+cargo test --workspace     # 86 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
