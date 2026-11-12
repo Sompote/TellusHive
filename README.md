@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.5 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.5):
+Version 0.1.6 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.6):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.5-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.5/TellusHive-0.1.5-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.5-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.5/TellusHive-0.1.5-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.6-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.6/TellusHive-0.1.6-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.6-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.6/TellusHive-0.1.6-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,24 +32,27 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.5
+### What is new in 0.1.6
 
-Standards search has two settings under **Settings › Standards search**: **Simple**, the built-in
-offline search by words and clause numbers, and an **embedding model through OpenRouter**
-(baai/bge-m3 by default, multilingual and about USD 0.01 per million tokens), which also finds a
-clause by its meaning and uses the OpenRouter key from Providers. The Standards page shows how
-each standard is searched and re-indexes those built the other way. Thai standards from PDFs set
-in Windows fonts no longer show boxes for the tone marks, and Thai searches now match them,
-because those legacy characters are mapped to the real marks, and standards indexed before are
-repaired once when the app starts. **Settings › Skills** lists every skill and adds one from a
-skill folder or a .skill or .zip file, writes a new one, or removes one from TellusHive's own
-folder. Chat tables and the output panel no longer draw text over text.
+Agents now think only when you ask them to, because every provider and agent starts with
+**Thinking** off. In a pile-cap design run the Designer on DeepSeek V4.1 Flash through OpenRouter
+spent 85 to 176 s per step writing up to 90,000 characters of reasoning, even at the low setting,
+whereas with thinking off its steps took 2 to 13 s. The harness also stops an agent that is going
+nowhere, set under **Settings › General › Agent limits** and per agent in **Team**. An agent whose
+tool fails three times in a row with the same error is stopped and the coordinator is told why. A
+reply cut off at the output limit before any answer is asked again once and then reported, instead
+of being passed on as an empty answer. A model reply that sends nothing for 120 s, or runs past
+15 min, is abandoned and retried. A delegated task stops at its time limit, 20 min for the
+designer, checker, drafter and reporter, 30 min for the BIM modeller and 90 min for the analysts,
+whose finite element runs take longer, and the coordinator gets the answer so far.
 
-From 0.1.4, the geotechnical analyst runs TellusLEM for slope stability by limit equilibrium
-(Morgenstern-Price, with Bishop and Spencer as cross-checks), while Tellus confirms a critical
-slope by phi-c reduction and gives the deformations. Drawings use dimension text at the labels'
-size and Arial (Tahoma for Thai) instead of the txt.shx shape font, and **Stop** stops at once,
-including a program calculation or a script that is running.
+From 0.1.5, standards search uses either the built-in offline method or an embedding model through
+OpenRouter (**Settings › Standards search**), Thai standards from PDFs set in Windows fonts show
+and match their tone marks, **Settings › Skills** adds, writes and removes skills, and chat tables
+no longer draw text over text. From 0.1.4, the geotechnical analyst runs TellusLEM for slope
+stability by limit equilibrium while Tellus confirms a critical slope by phi-c reduction, drawings
+use Arial (Tahoma for Thai) at the labels' text size, and **Stop** stops at once, including a
+program calculation or a script that is running.
 
 The team keeps to the work the engineer asks for, so a slope, excavation or embankment analysis
 does not start the BIM modeller or the structural analyst unless a model is asked for. When it
@@ -69,8 +72,8 @@ design office** in step **3 Team** to get the new wording, then add your changes
 3. **Choose the standards.** In step **2 Standards**, import the codes you design to (PDF, text
    or Markdown) and tick the ones this project follows, so agents cite real clauses.
 4. **Check the team.** Step **3 Team** shows the coordinator and the specialists. Click an agent
-   to set its model, its **Thinking** (off for drafting and BIM, high for checking), its tools
-   and its plugins. The arrows show who may delegate to whom.
+   to set its model, its **Thinking** (off by default), its **Time limit**, its tools and its
+   plugins. The arrows show who may delegate to whom.
 5. **Connect programs (optional).** Step **4 Plugins** lists the MCP programs found on your
    computer, such as TellusLEM (slope stability), Tellus, Tellus3D, Pondus, Aedifex (buildings and
    terrain) and CADCraft.
@@ -128,7 +131,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 89 tests, no API key needed
+cargo test --workspace     # 96 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
