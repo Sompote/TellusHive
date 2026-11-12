@@ -239,18 +239,30 @@ pub fn api_embed(
     for batch in inputs.chunks(API_BATCH) {
         // very long inputs overflow small embedding contexts (e.g. 2k tokens)
         let batch: Vec<String> = batch.iter().map(|s| truncate(s, 6000)).collect();
-        let mut req = agent.post(&url).set("Content-Type", "application/json");
-        if let Some(k) = &key {
-            req = req.set("Authorization", &format!("Bearer {k}"));
-        }
-        let resp = req.send_json(request_body(model, &batch));
-        let v: Value = match resp {
-            Ok(r) => r.into_json().map_err(|e| format!("embedding response is not JSON: {e}"))?,
-            Err(ureq::Error::Status(code, r)) => {
-                let body = r.into_string().unwrap_or_default();
-                return Err(format!("embedding API {url} returned HTTP {code}: {}", truncate(&body, 400)));
+        // a rate limit, a server error or a dropped connection is tried again after 1, 2 and 4 s
+        let mut attempt = 0;
+        let v: Value = loop {
+            let mut req = agent.post(&url).set("Content-Type", "application/json");
+            if let Some(k) = &key {
+                req = req.set("Authorization", &format!("Bearer {k}"));
             }
-            Err(e) => return Err(format!("cannot reach embedding API {url}: {e}")),
+            let err = match req.send_json(request_body(model, &batch)) {
+                Ok(r) => break r.into_json().map_err(|e| format!("embedding response is not JSON: {e}"))?,
+                Err(ureq::Error::Status(code, r)) => {
+                    let body = r.into_string().unwrap_or_default();
+                    let msg = format!("embedding API {url} returned HTTP {code}: {}", truncate(&body, 400));
+                    if !(code == 408 || code == 429 || code >= 500) {
+                        return Err(msg);
+                    }
+                    msg
+                }
+                Err(e) => format!("cannot reach embedding API {url}: {e}"),
+            };
+            attempt += 1;
+            if attempt > 3 {
+                return Err(err);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1 << (attempt - 1)));
         };
         out.extend(parse_response(&v, batch.len())?);
         progress(out.len(), inputs.len());
