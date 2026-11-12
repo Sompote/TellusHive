@@ -596,7 +596,7 @@ impl TeamView {
                     }
                 })
                 .response
-                .on_hover_text("How long the model thinks before each reply. Off suits routine work (drafting, BIM modelling); keep it on for designing and checking. Sent to OpenRouter as its reasoning setting.");
+                .on_hover_text("How long the model thinks before each reply. 'Provider default' takes the provider's Thinking under Settings › Models (low unless changed). Off suits routine work (drafting, BIM modelling); keep it on for designing and checking. Sent to OpenRouter as its reasoning setting.");
             });
             ui.horizontal(|ui| {
                 chrome::row_label(ui, "Max turns");

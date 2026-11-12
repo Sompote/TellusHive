@@ -24,6 +24,10 @@ pub struct Provider {
     pub default_model: String,
     /// Whether the provider's models accept image parts. DeepSeek's API does not.
     pub vision: bool,
+    /// How long its models think before each reply for agents left on "provider default":
+    /// "" (the model's own default), "off", "low", "medium" or "high". Sent only to OpenRouter,
+    /// whose unified `reasoning` field maps it to each model's own switch.
+    pub thinking: String,
 }
 
 impl Default for Provider {
@@ -41,6 +45,7 @@ impl Provider {
             key_env: "DEEPSEEK_API_KEY".into(),
             default_model: "deepseek-chat".into(),
             vision: false,
+            thinking: "low".into(),
         }
     }
     pub fn openrouter() -> Self {
@@ -51,6 +56,7 @@ impl Provider {
             key_env: "OPENROUTER_API_KEY".into(),
             default_model: "deepseek/deepseek-v4.1-flash-1017".into(),
             vision: true,
+            thinking: "low".into(),
         }
     }
     pub fn ollama() -> Self {
@@ -61,6 +67,7 @@ impl Provider {
             key_env: String::new(),
             default_model: "qwen2.5:14b".into(),
             vision: false,
+            thinking: "low".into(),
         }
     }
     pub fn openai() -> Self {
@@ -71,15 +78,25 @@ impl Provider {
             key_env: "OPENAI_API_KEY".into(),
             default_model: "gpt-4.1-mini".into(),
             vision: true,
+            thinking: "low".into(),
+        }
+    }
+    /// Drops the fields this provider's API does not take: `reasoning` is OpenRouter's (an
+    /// API such as OpenAI's rejects an argument it does not know).
+    pub fn keep_only_known(&self, body: &mut Value) {
+        if !self.base_url.contains("openrouter.ai") {
+            if let Some(o) = body.as_object_mut() {
+                o.remove("reasoning");
+            }
         }
     }
     /// Claude Code run as the model (`claude -p`), on the user's Claude subscription.
     pub fn claude_code() -> Self {
-        Provider { name: "claude-code".into(), base_url: "cli://claude-code".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false }
+        Provider { name: "claude-code".into(), base_url: "cli://claude-code".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new() }
     }
     /// Codex run as the model (`codex exec`), on the user's ChatGPT subscription.
     pub fn codex() -> Self {
-        Provider { name: "codex".into(), base_url: "cli://codex".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false }
+        Provider { name: "codex".into(), base_url: "cli://codex".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new() }
     }
     pub fn presets() -> Vec<Provider> {
         vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai(), Provider::claude_code(), Provider::codex()]
@@ -365,7 +382,8 @@ fn truncate(s: &str, n: usize) -> String {
 /// One chat-completions call. Retries twice on rate limits and server errors.
 pub fn chat(p: &Provider, model: &str, messages: &[Message], tools: &[ToolSpec], opt: &ChatOptions) -> Result<Reply, String> {
     let model = if model.is_empty() { p.default_model.as_str() } else { model };
-    let body = request_body(model, messages, tools, opt);
+    let mut body = request_body(model, messages, tools, opt);
+    p.keep_only_known(&mut body);
     let a = agent(opt.timeout);
     let mut last = String::new();
     for attempt in 0..3 {
@@ -530,6 +548,7 @@ pub fn chat_stream(p: &Provider, model: &str, messages: &[Message], tools: &[Too
     let err = |message: String, status: Option<u16>| CallError { overflow: is_overflow(&message), message, status, cancelled: false };
     let model = if model.is_empty() { p.default_model.as_str() } else { model };
     let mut body = request_body(model, messages, tools, opt);
+    p.keep_only_known(&mut body);
     body["stream"] = json!(true);
     body["stream_options"] = json!({"include_usage": true});
     let mut req = agent(opt.timeout).post(&p.url("chat/completions")).set("Content-Type", "application/json").set("Accept", "text/event-stream");
@@ -634,6 +653,25 @@ mod tests {
         assert_eq!(request_body("m", &[], &[], &o)["reasoning"], json!({"enabled": false}));
         o.reasoning = Some("high".into());
         assert_eq!(request_body("m", &[], &[], &o)["reasoning"]["effort"], "high");
+    }
+
+    /// The thinking level reaches OpenRouter only; a saved provider without the field thinks
+    /// at "low".
+    #[test]
+    fn thinking_goes_to_openrouter_only() {
+        let o = ChatOptions { reasoning: Some("low".into()), ..Default::default() };
+        let mut b = request_body("m", &[], &[], &o);
+        Provider::openrouter().keep_only_known(&mut b);
+        assert_eq!(b["reasoning"]["effort"], "low");
+        for p in [Provider::openai(), Provider::deepseek(), Provider::ollama()] {
+            let mut b = request_body("m", &[], &[], &o);
+            p.keep_only_known(&mut b);
+            assert!(b.get("reasoning").is_none(), "{} gets no reasoning field", p.name);
+        }
+        let old: Provider = serde_json::from_value(json!({"name": "openrouter", "base_url": "https://openrouter.ai/api/v1", "api_key": "", "key_env": "", "default_model": "x", "vision": true})).unwrap();
+        assert_eq!(old.thinking, "low");
+        assert_eq!(Provider::openrouter().thinking, "low");
+        assert!(Provider::claude_code().thinking.is_empty());
     }
 
     #[test]

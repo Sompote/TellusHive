@@ -36,6 +36,9 @@ pub struct SettingsView {
     new_skill: (String, String, String),
 }
 
+/// The thinking levels a provider or an agent can choose.
+const THINKING: [(&str, &str); 5] = [("", "model default"), ("off", "off (fastest)"), ("low", "low"), ("medium", "medium"), ("high", "high (most careful)")];
+
 fn group(ui: &mut egui::Ui, title: &str, context: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = tokens(ui);
     ui.add_space(14.0);
@@ -142,6 +145,21 @@ impl SettingsView {
                 chrome::password(ui, "API key", &mut p.api_key).on_hover_text(format!("Stored in the settings file (owner-only), or set the environment variable {}.", p.key_env));
                 chrome::field(ui, "Key variable", &mut p.key_env);
                 chrome::field(ui, "Default model", &mut p.default_model);
+                ui.horizontal(|ui| {
+                    chrome::row_label(ui, "Thinking");
+                    let shown = THINKING.iter().find(|(v, _)| *v == p.thinking).map_or(p.thinking.as_str(), |(_, l)| *l).to_string();
+                    egui::ComboBox::from_id_salt(("prov_thinking", i)).selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                        for (v, l) in THINKING {
+                            ui.selectable_value(&mut p.thinking, v.to_string(), l);
+                        }
+                    })
+                    .response
+                    .on_hover_text(if p.base_url.contains("openrouter.ai") {
+                        "How long the models think before each reply, for agents whose own Thinking is 'provider default'. Low keeps replies quick; raise it for hard design checks, or set it per agent in step 3 Team."
+                    } else {
+                        "Sent through OpenRouter's reasoning setting, so it applies only to OpenRouter; this provider's API does not take it."
+                    });
+                });
                 ui.horizontal(|ui| {
                     chrome::row_label(ui, "");
                     ui.checkbox(&mut p.vision, "Models accept images");

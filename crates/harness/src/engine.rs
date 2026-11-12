@@ -160,6 +160,12 @@ impl Plugins {
     }
 }
 
+/// How long an agent's model thinks: its own setting, else its provider's (Settings ›
+/// Models, low by default), else the model's own default.
+pub fn thinking_for(a: &AgentSpec, p: &th_llm::Provider) -> Option<String> {
+    [a.thinking.trim(), p.thinking.trim()].into_iter().find(|t| !t.is_empty()).map(str::to_string)
+}
+
 /// What the TellusHive plugins work on (the `tellushive` service): the engineer's settings,
 /// team, project, standards library, MCP programs and skills, plus the chat's event channel
 /// for the turn in progress.
@@ -224,7 +230,8 @@ impl Domain {
         // DeepSeek's own API stops at 8k output tokens; OpenRouter and others allow long tool calls (reports)
         let max_out = if provider.base_url.contains("api.deepseek.com") { 8192 } else { 32_000 };
         let tools = if a.tools.iter().any(|t| t == "*") { ToolFilter::All } else { ToolFilter::Only(a.tools.clone()) };
-        Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: Some(a.temperature), max_tokens: Some(max_out), reasoning: (!a.thinking.is_empty()).then(|| a.thinking.clone()), max_steps: a.max_turns.max(1), tools, meta: json!({"color": a.color}) })
+        let reasoning = thinking_for(a, &provider);
+        Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: Some(a.temperature), max_tokens: Some(max_out), reasoning, max_steps: a.max_turns.max(1), tools, meta: json!({"color": a.color}) })
     }
 
     /// Calls one plugin tool. Pictures it returns are saved to images/; a live model the
@@ -497,6 +504,21 @@ pub(crate) mod base64_lite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An agent's own thinking wins; "provider default" takes the provider's level.
+    #[test]
+    fn agent_thinking_falls_back_to_the_provider() {
+        let p = th_llm::Provider::openrouter();
+        let mut a = AgentSpec::default();
+        assert_eq!(thinking_for(&a, &p).as_deref(), Some("low"));
+        a.thinking = "high".into();
+        assert_eq!(thinking_for(&a, &p).as_deref(), Some("high"));
+        a.thinking = "off".into();
+        assert_eq!(thinking_for(&a, &p).as_deref(), Some("off"));
+        a.thinking.clear();
+        let none = th_llm::Provider { thinking: String::new(), ..p };
+        assert_eq!(thinking_for(&a, &none), None);
+    }
 
     #[test]
     fn b64() {
