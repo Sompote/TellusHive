@@ -4,7 +4,9 @@
 //! concurrent, so several delegations in one reply run at the same time;
 //! `delegate_parallel` gives the same in one call.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -96,13 +98,37 @@ impl SubagentProvider for ChildAgent {
         let lp = ctx.expect::<AgentLoop>(keys::LOOP)?;
         let id = store.new_id(&self.preset.id);
         let session = store.create(SessionMeta { id, agent: self.preset.id.clone(), label: crate::clip(task, 120), parent: Some(parent.id.clone()), depth: parent.depth + 1 })?;
-        let child = agents.create(self.preset.clone(), session, Some(parent), parent.cancel.clone());
+        // the child has its own Stop flag, set by the parent's Stop or by its time limit
+        let cancel = Arc::new(AtomicBool::new(parent.cancel.load(Ordering::Relaxed)));
+        let child = agents.create(self.preset.clone(), session, Some(parent), cancel.clone());
         child.followup(Inbound { text: format!("Task from {}:\n{task}", parent.preset.name), images: vec![], source: "parent".into() });
-        let r = lp.run_turn(ctx, &child);
+        let (done, timed_out) = (AtomicBool::new(false), AtomicBool::new(false));
+        let start = Instant::now();
+        let r = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                while !done.load(Ordering::Relaxed) {
+                    if parent.cancel.load(Ordering::Relaxed) {
+                        cancel.store(true, Ordering::Relaxed);
+                    } else if self.preset.time_limit.is_some_and(|l| start.elapsed() >= l) && !cancel.load(Ordering::Relaxed) {
+                        timed_out.store(true, Ordering::Relaxed);
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+            let r = lp.run_turn(ctx, &child);
+            done.store(true, Ordering::Relaxed);
+            r
+        });
         agents.remove(&child.id);
         let out = r?;
         match out.reason.as_str() {
             "completed" | "max-steps" => Ok(out.text),
+            "cancelled" if timed_out.load(Ordering::Relaxed) => {
+                let min = self.preset.time_limit.map(|l| l.as_secs_f64() / 60.0).unwrap_or_default();
+                let got = if out.text.trim().is_empty() { "no answer yet".to_string() } else { format!("its answer so far:\n{}", out.text) };
+                Err(format!("{} stopped at its time limit of {min:.0} min, {got}", self.preset.name))
+            }
             "cancelled" => Err("cancelled".into()),
             other => Err(format!("{} stopped ({other}): {}", self.preset.name, out.text)),
         }

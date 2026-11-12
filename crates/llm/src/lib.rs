@@ -45,7 +45,7 @@ impl Provider {
             key_env: "DEEPSEEK_API_KEY".into(),
             default_model: "deepseek-chat".into(),
             vision: false,
-            thinking: "low".into(),
+            thinking: "off".into(),
         }
     }
     pub fn openrouter() -> Self {
@@ -56,7 +56,7 @@ impl Provider {
             key_env: "OPENROUTER_API_KEY".into(),
             default_model: "deepseek/deepseek-v4.1-flash-1017".into(),
             vision: true,
-            thinking: "low".into(),
+            thinking: "off".into(),
         }
     }
     pub fn ollama() -> Self {
@@ -67,7 +67,7 @@ impl Provider {
             key_env: String::new(),
             default_model: "qwen2.5:14b".into(),
             vision: false,
-            thinking: "low".into(),
+            thinking: "off".into(),
         }
     }
     pub fn openai() -> Self {
@@ -78,7 +78,7 @@ impl Provider {
             key_env: "OPENAI_API_KEY".into(),
             default_model: "gpt-4.1-mini".into(),
             vision: true,
-            thinking: "low".into(),
+            thinking: "off".into(),
         }
     }
     /// Drops the fields this provider's API does not take: `reasoning` is OpenRouter's (an
@@ -285,6 +285,21 @@ impl Default for ChatOptions {
     fn default() -> Self {
         ChatOptions { temperature: Some(0.2), reasoning: None, max_tokens: Some(8192), timeout: Duration::from_secs(300) }
     }
+}
+
+static STALL_S: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(120);
+static REPLY_LIMIT_S: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(900);
+
+/// Limits of a streamed reply: a stream that sends no data for `stall_s` seconds, or a reply
+/// still running after `reply_limit_s`, fails as a transport error (so it is retried).
+/// 0 leaves that limit off.
+pub fn set_stream_limits(stall_s: u64, reply_limit_s: u64) {
+    STALL_S.store(stall_s, std::sync::atomic::Ordering::Relaxed);
+    REPLY_LIMIT_S.store(reply_limit_s, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn stream_limits() -> (u64, u64) {
+    (STALL_S.load(std::sync::atomic::Ordering::Relaxed), REPLY_LIMIT_S.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 fn agent(timeout: Duration) -> ureq::Agent {
@@ -551,7 +566,16 @@ pub fn chat_stream(p: &Provider, model: &str, messages: &[Message], tools: &[Too
     p.keep_only_known(&mut body);
     body["stream"] = json!(true);
     body["stream_options"] = json!({"include_usage": true});
-    let mut req = agent(opt.timeout).post(&p.url("chat/completions")).set("Content-Type", "application/json").set("Accept", "text/event-stream");
+    let (stall_s, limit_s) = stream_limits();
+    let stall = (stall_s > 0).then(|| Duration::from_secs(stall_s));
+    let limit = (limit_s > 0).then(|| Duration::from_secs(limit_s));
+    // no overall timeout here (it would override the read timeout): a silent socket fails
+    // after `stall`, and the reply's whole time is checked line by line below
+    let mut b = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(20));
+    if let Some(d) = stall {
+        b = b.timeout_read(d);
+    }
+    let mut req = b.build().post(&p.url("chat/completions")).set("Content-Type", "application/json").set("Accept", "text/event-stream");
     if let Some(k) = p.key() {
         req = req.set("Authorization", &format!("Bearer {k}"));
     }
@@ -564,12 +588,29 @@ pub fn chat_stream(p: &Provider, model: &str, messages: &[Message], tools: &[Too
         Err(e) => return Err(err(format!("{}: {}", p.name, http_error(e)), None)),
     };
     let mut fold = StreamFold::default();
+    let (start, mut last_data) = (std::time::Instant::now(), std::time::Instant::now());
     for line in std::io::BufReader::new(resp.into_reader()).lines() {
         if cancel.load(Ordering::Relaxed) {
             return Err(CallError { message: "cancelled".into(), status: None, overflow: false, cancelled: true });
         }
-        let line = line.map_err(|e| err(format!("{}: stream broke: {e}", p.name), None))?;
-        let Some(data) = line.strip_prefix("data:").map(str::trim) else { continue };
+        let line = line.map_err(|e| {
+            let timed_out = matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock);
+            match stall {
+                Some(d) if timed_out => err(format!("{}: the reply stalled (nothing received for {} s)", p.name, d.as_secs()), None),
+                _ => err(format!("{}: stream broke: {e}", p.name), None),
+            }
+        })?;
+        if let Some(l) = limit.filter(|l| start.elapsed() > *l) {
+            return Err(err(format!("{}: the reply ran past its limit of {} min", p.name, l.as_secs() / 60), None));
+        }
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            // keep-alive comments (": OPENROUTER PROCESSING") while nothing else arrives
+            if let Some(d) = stall.filter(|d| last_data.elapsed() > *d) {
+                return Err(err(format!("{}: the reply stalled (only keep-alive messages for {} s)", p.name, d.as_secs()), None));
+            }
+            continue;
+        };
+        last_data = std::time::Instant::now();
         if data == "[DONE]" {
             break;
         }
@@ -656,7 +697,7 @@ mod tests {
     }
 
     /// The thinking level reaches OpenRouter only; a saved provider without the field thinks
-    /// at "low".
+    /// with thinking off.
     #[test]
     fn thinking_goes_to_openrouter_only() {
         let o = ChatOptions { reasoning: Some("low".into()), ..Default::default() };
@@ -669,8 +710,8 @@ mod tests {
             assert!(b.get("reasoning").is_none(), "{} gets no reasoning field", p.name);
         }
         let old: Provider = serde_json::from_value(json!({"name": "openrouter", "base_url": "https://openrouter.ai/api/v1", "api_key": "", "key_env": "", "default_model": "x", "vision": true})).unwrap();
-        assert_eq!(old.thinking, "low");
-        assert_eq!(Provider::openrouter().thinking, "low");
+        assert_eq!(old.thinking, "off");
+        assert_eq!(Provider::openrouter().thinking, "off");
         assert!(Provider::claude_code().thinking.is_empty());
     }
 
@@ -709,5 +750,36 @@ mod tests {
         assert_eq!(v["content"][1]["image_url"]["url"], "data:x");
         let back: Message = serde_json::from_value(v).unwrap();
         assert!(back.content.unwrap().has_images());
+    }
+
+    /// A reply that goes silent, or sends only keep-alive comments, fails as a transport
+    /// error after the stall limit instead of waiting for ever.
+    #[test]
+    fn stalled_stream_is_abandoned() {
+        use std::io::{Read, Write};
+        set_stream_limits(1, 0);
+        for keepalive in [false, true] {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = l.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                let (mut c, _) = l.accept().unwrap();
+                let mut buf = [0u8; 65536];
+                let _ = c.read(&mut buf);
+                let _ = c.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+                for _ in 0..40 {
+                    if keepalive {
+                        let _ = c.write_all(b": OPENROUTER PROCESSING\n\n");
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+            let p = Provider { base_url: format!("http://127.0.0.1:{port}/v1"), ..Provider::ollama() };
+            let t0 = std::time::Instant::now();
+            let e = chat_stream(&p, "m", &[Message::user("hi")], &[], &ChatOptions::default(), &mut |_| {}, &std::sync::atomic::AtomicBool::new(false)).unwrap_err();
+            assert!(e.message.contains("stalled"), "{}", e.message);
+            assert!(e.status.is_none() && !e.cancelled);
+            assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+        }
+        set_stream_limits(120, 900);
     }
 }

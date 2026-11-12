@@ -596,11 +596,16 @@ impl TeamView {
                     }
                 })
                 .response
-                .on_hover_text("How long the model thinks before each reply. 'Provider default' takes the provider's Thinking under Settings › Models (low unless changed). Off suits routine work (drafting, BIM modelling); keep it on for designing and checking. Sent to OpenRouter as its reasoning setting.");
+                .on_hover_text("How long the model thinks before each reply. 'Provider default' takes the provider's Thinking under Settings › Models (off unless changed). Off suits routine work (drafting, BIM modelling); keep it on for designing and checking. Sent to OpenRouter as its reasoning setting.");
             });
             ui.horizontal(|ui| {
                 chrome::row_label(ui, "Max turns");
                 ui.add_sized([70.0, 28.0], egui::DragValue::new(&mut a.max_turns).range(1..=200));
+            });
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "Time limit");
+                ui.add_sized([70.0, 28.0], egui::DragValue::new(&mut a.time_limit_min).range(0..=600).suffix(" min"))
+                    .on_hover_text("How long a task delegated to this agent may run. When it passes, the agent is stopped and the coordinator gets what it has so far. 0 = no limit. Give the analysts room for finite element runs (90 min by default).");
             });
 
             chrome::section(ui, "Built-in tools");

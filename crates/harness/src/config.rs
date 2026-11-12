@@ -150,13 +150,19 @@ pub struct HarnessSettings {
     pub repeat_thresholds: Vec<usize>,
     /// Retries of a failed model request.
     pub retries: u32,
+    /// Failures of one tool in a row with the same error that stop the agent; 0 = never.
+    pub fail_limit: usize,
+    /// Seconds without any data from the model before its reply is abandoned and retried; 0 = wait.
+    pub stall_s: u64,
+    /// Minutes one model reply may take before it is abandoned and retried; 0 = no limit.
+    pub reply_limit_min: u64,
     /// Plugin names to leave out, e.g. "hive-team-board".
     pub disabled_plugins: Vec<String>,
 }
 
 impl Default for HarnessSettings {
     fn default() -> Self {
-        HarnessSettings { compaction_budget_tokens: 90_000, max_parallel: 8, spill_chars: 12_000, repeat_thresholds: vec![3, 5, 8], retries: 3, disabled_plugins: vec![] }
+        HarnessSettings { compaction_budget_tokens: 90_000, max_parallel: 8, spill_chars: 12_000, repeat_thresholds: vec![3, 5, 8], retries: 3, fail_limit: 3, stall_s: 120, reply_limit_min: 15, disabled_plugins: vec![] }
     }
 }
 
@@ -295,14 +301,20 @@ impl Settings {
             }
         }
         s.share_openrouter_key();
+        s.share_stream_limits();
         s
     }
     pub fn save(&self) -> Result<(), String> {
         self.share_openrouter_key();
+        self.share_stream_limits();
         write_json(&Self::path(), self, true)
     }
     /// The standards library embeds through OpenRouter with the OpenRouter provider's key,
     /// which it keeps in memory rather than in each standard's files.
+    /// Hands the model-stream limits to th-llm.
+    pub fn share_stream_limits(&self) {
+        th_llm::set_stream_limits(self.harness.stall_s, self.harness.reply_limit_min * 60);
+    }
     pub fn share_openrouter_key(&self) {
         th_kb::set_openrouter_key(self.providers.iter().find(|p| p.name == "openrouter").and_then(|p| p.key()));
     }
@@ -334,6 +346,10 @@ pub struct AgentSpec {
     /// May hand work to Claude Code / Codex.
     pub can_use_external: bool,
     pub max_turns: usize,
+    /// Minutes a delegated task may run before the agent is stopped and its parent gets what
+    /// it has; 0 = no limit. Saved teams without it take the built-in agent's value.
+    #[serde(default = "time_limit_unset")]
+    pub time_limit_min: u64,
     pub temperature: f32,
     /// Thinking before each reply: "" (the provider's default), "off", "low", "medium",
     /// "high". Off makes routine agents (drafting, modelling) several times faster.
@@ -342,6 +358,31 @@ pub struct AgentSpec {
     pub color: String,
     /// Position on the team canvas.
     pub pos: [f32; 2],
+}
+
+const TIME_LIMIT_UNSET: u64 = u64::MAX;
+
+fn time_limit_unset() -> u64 {
+    TIME_LIMIT_UNSET
+}
+
+/// The built-in time limit of a delegated task (minutes): analysts run finite element jobs
+/// of up to an hour, the coordinator runs at the top and is never delegated.
+pub fn default_time_limit(id: &str) -> u64 {
+    match id {
+        "coordinator" => 0,
+        "geo_analyst" | "struct_analyst" | "particle_modeller" => 90,
+        "designer" | "checker" | "drafter" | "reporter" => 20,
+        _ => 30,
+    }
+}
+
+impl AgentSpec {
+    /// The time limit, with an unset value read as the built-in one.
+    pub fn time_limit(&self) -> Option<std::time::Duration> {
+        let m = if self.time_limit_min == TIME_LIMIT_UNSET { default_time_limit(&self.id) } else { self.time_limit_min };
+        (m > 0).then(|| std::time::Duration::from_secs(m * 60))
+    }
 }
 
 impl Default for AgentSpec {
@@ -359,6 +400,7 @@ impl Default for AgentSpec {
             can_delegate: false,
             can_use_external: false,
             max_turns: 30,
+            time_limit_min: 30,
             temperature: 0.2,
             thinking: String::new(),
             color: "#2f74d0".into(),
@@ -430,7 +472,7 @@ pub fn default_team() -> TeamSpec {
         skills: s(&["*"]),
         color: "#c23b2e".into(),
         pos: [420.0, 95.0],
-        thinking: "high".into(),
+        thinking: "off".into(),
         ..Default::default()
     };
     let drafter = AgentSpec {
@@ -514,7 +556,7 @@ pub fn default_team() -> TeamSpec {
         name: "Design office".into(),
         description: "Coordinator with designer, checker, drafter and reporter.".into(),
         coordinator: "coordinator".into(),
-        agents: vec![coordinator, designer, checker, drafter, reporter, geo, structural, particles, bim],
+        agents: [coordinator, designer, checker, drafter, reporter, geo, structural, particles, bim].map(|a| AgentSpec { time_limit_min: default_time_limit(&a.id), ..a }).into(),
         links: vec![],
         custom_links: false,
     }
@@ -539,6 +581,9 @@ impl TeamSpec {
     }
     pub fn load(name: &str) -> TeamSpec {
         let mut t: TeamSpec = read_json(&Self::dir().join(Self::file_name(name))).unwrap_or_else(|_| default_team());
+        for a in t.agents.iter_mut().filter(|a| a.time_limit_min == TIME_LIMIT_UNSET) {
+            a.time_limit_min = default_time_limit(&a.id);
+        }
         // the built-in team gains the specialists added in later versions
         let d = default_team();
         if t.name == d.name {
@@ -599,5 +644,24 @@ impl TeamSpec {
     pub fn reachable(&self, from: &str) -> Vec<&AgentSpec> {
         let links = self.effective_links();
         self.agents.iter().filter(|a| a.id != from && links.iter().any(|(f, t)| f == from && *t == a.id)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A team saved before time limits existed takes each built-in agent's limit.
+    #[test]
+    fn saved_agents_without_a_time_limit_take_the_built_in_one() {
+        let geo: AgentSpec = serde_json::from_value(serde_json::json!({"id": "geo_analyst"})).unwrap();
+        assert_eq!(geo.time_limit(), Some(std::time::Duration::from_secs(90 * 60)));
+        let lead: AgentSpec = serde_json::from_value(serde_json::json!({"id": "coordinator"})).unwrap();
+        assert_eq!(lead.time_limit(), None);
+        let set: AgentSpec = serde_json::from_value(serde_json::json!({"id": "designer", "time_limit_min": 5})).unwrap();
+        assert_eq!(set.time_limit(), Some(std::time::Duration::from_secs(300)));
+        assert!(default_team().agents.iter().all(|a| a.time_limit_min == default_time_limit(&a.id)));
+        let h: HarnessSettings = serde_json::from_value(serde_json::json!({"retries": 2})).unwrap();
+        assert_eq!((h.fail_limit, h.stall_s, h.reply_limit_min), (3, 120, 15));
     }
 }

@@ -50,7 +50,7 @@ fn calls(cs: &[(&str, &str, serde_json::Value)]) -> Reply {
 }
 
 fn preset(id: &str) -> AgentPreset {
-    AgentPreset { id: id.into(), name: id.to_uppercase(), role: format!("{id} role"), provider: Provider::deepseek(), model: "m".into(), temperature: Some(0.2), max_tokens: Some(1000), reasoning: None, max_steps: 12, tools: ToolFilter::All, meta: json!({}) }
+    AgentPreset { id: id.into(), name: id.to_uppercase(), role: format!("{id} role"), provider: Provider::deepseek(), model: "m".into(), temperature: Some(0.2), max_tokens: Some(1000), reasoning: None, max_steps: 12, time_limit: None, fail_limit: 3, tools: ToolFilter::All, meta: json!({}) }
 }
 
 fn boot(cfg: BaseConfig, script: Box<Script>) -> (Hive, Arc<Scripted>) {
@@ -67,7 +67,15 @@ fn boot(cfg: BaseConfig, script: Box<Script>) -> (Hive, Arc<Scripted>) {
         tools.register(ctx, ToolDef::new("add", "adds", json!({"type":"object"}), |_, a| Ok(ToolOutput::ok(format!("{}", a["a"].as_i64().unwrap_or(0) + a["b"].as_i64().unwrap_or(0))))))?;
         tools.register(ctx, ToolDef::new("big", "long output", json!({"type":"object"}), |_, _| Ok(ToolOutput::ok("x".repeat(5000)))))?;
         let subs = ctx.expect::<Subagents>(keys::SUBAGENTS)?;
-        subs.source(ctx, |a| if a.depth == 0 { vec![Arc::new(ChildAgent { preset: preset("worker") }) as Arc<dyn th_hive::plugins::subagent::SubagentProvider>] } else { vec![] });
+        tools.register(ctx, ToolDef::new("broken", "always fails", json!({"type":"object"}), |_, _| Err("give `code`".into())))?;
+        let slow = AgentPreset { time_limit: Some(Duration::from_millis(250)), ..preset("slowpoke") };
+        subs.source(ctx, move |a| {
+            if a.depth == 0 {
+                vec![Arc::new(ChildAgent { preset: preset("worker") }) as Arc<dyn th_hive::plugins::subagent::SubagentProvider>, Arc::new(ChildAgent { preset: slow.clone() })]
+            } else {
+                vec![]
+            }
+        });
         Ok(())
     }));
     (Hive::boot(plugins), adapter)
@@ -239,4 +247,67 @@ fn resumed_session_keeps_history() {
     let a = h.agent(preset("lead"), s, Arc::new(AtomicBool::new(false)));
     assert_eq!(h.send(&a, user("two")).unwrap().text, "seen 3 messages");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A tool that fails the same way three times in a row ends the turn, even when the
+/// arguments change, and says why; the reminder comes one failure before.
+#[test]
+fn repeated_identical_failures_stop_the_agent() {
+    let (h, ad) = boot(BaseConfig::default(), Box::new(|req, n| {
+        if n == 2 {
+            assert!(req.messages.iter().any(|m| m.text().contains("one more identical failure ends your task")));
+        }
+        Ok(calls(&[(&format!("c{n}"), "broken", json!({"try": n}))]))
+    }));
+    let a = new_agent(&h, "fail1");
+    let out = h.send(&a, user("run it")).unwrap();
+    assert_eq!(out.reason, "stuck");
+    assert!(out.text.contains("broken failed 3 times in a row"), "{}", out.text);
+    assert_eq!(ad.calls.load(Ordering::SeqCst), 3);
+}
+
+fn cut_off() -> Reply {
+    Reply { message: Message::assistant(""), reasoning: Some("very long thinking".into()), finish_reason: "length".into(), usage: Usage::default() }
+}
+
+/// A reply cut off at the output limit before any answer is asked again once, then reported.
+#[test]
+fn reply_cut_off_at_the_output_limit() {
+    let (h, _) = boot(BaseConfig::default(), Box::new(|req, n| match n {
+        0 => Ok(cut_off()),
+        _ => {
+            assert!(req.messages.iter().any(|m| m.text().contains("reached the output limit of 1000 tokens")));
+            Ok(text("short answer"))
+        }
+    }));
+    let a = new_agent(&h, "cut1");
+    assert_eq!(h.send(&a, user("go")).unwrap(), TurnOutcome { text: "short answer".into(), reason: "completed".into() });
+    let (h, _) = boot(BaseConfig::default(), Box::new(|_, _| Ok(cut_off())));
+    let a = new_agent(&h, "cut2");
+    let out = h.send(&a, user("go")).unwrap();
+    assert_eq!(out.reason, "truncated");
+    assert!(out.text.contains("output limit of 1000 tokens twice"), "{}", out.text);
+}
+
+/// A delegated task past its time limit is stopped; the parent hears so and carries on.
+#[test]
+fn delegated_task_stops_at_its_time_limit() {
+    let (h, _) = boot(BaseConfig::default(), Box::new(|req, n| {
+        if req.messages[0].text().starts_with("Task from LEAD") {
+            std::thread::sleep(Duration::from_millis(120));
+            return Ok(calls(&[(&format!("a{n}"), "add", json!({"a": 1, "b": 1}))]));
+        }
+        if req.messages.iter().any(|m| m.role == "tool") {
+            return Ok(text("lead carries on"));
+        }
+        Ok(calls(&[("d1", "delegate", json!({"agent": "slowpoke", "task": "loop for ever"}))]))
+    }));
+    let a = new_agent(&h, "time1");
+    let t0 = Instant::now();
+    let out = h.send(&a, user("go")).unwrap();
+    assert_eq!(out.text, "lead carries on");
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    let r: Vec<String> = a.session.events().iter().filter_map(|e| if let EventBody::ToolResult { text, .. } = &e.body { Some(text.clone()) } else { None }).collect();
+    assert!(r[0].contains("SLOWPOKE stopped at its time limit"), "{}", r[0]);
+    assert!(!a.cancelled(), "the parent is not stopped");
 }

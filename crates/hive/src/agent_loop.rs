@@ -73,7 +73,7 @@ pub struct TurnStopping {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnOutcome {
     pub text: String,
-    /// completed | max-steps | cancelled | error | rejected
+    /// completed | max-steps | cancelled | error | rejected | stuck | truncated
     pub reason: String,
 }
 
@@ -114,6 +114,7 @@ impl AgentLoop {
         };
         let mut last_text = String::new();
         let mut step: u64 = 0;
+        let mut cut_off = false;
         loop {
             if agent.cancelled() {
                 return Ok(end("cancelled", last_text));
@@ -203,6 +204,20 @@ impl AgentLoop {
                 tools.run_batch(ctx, agent, &calls, &toolset);
             }
             s.append(EventBody::StepEnd { turn, step });
+            if let Some(why) = agent.take_halt() {
+                let note = if last_text.trim().is_empty() { format!("({why})") } else { format!("{last_text}\n\n({why})") };
+                return Ok(end("stuck", note));
+            }
+            if calls.is_empty() && text.trim().is_empty() && reply.finish_reason == "length" {
+                // the reply ran out of output tokens (usually in its reasoning) before any answer
+                let limit = p.max_tokens.map(|n| format!(" of {n} tokens")).unwrap_or_default();
+                if !cut_off {
+                    cut_off = true;
+                    agent.inject("plugin:output-limit", format!("Your last reply reached the output limit{limit} before you wrote anything. Do not reason at length: give the answer, or the next tool call, now and keep it short."));
+                    continue;
+                }
+                return Ok(end("truncated", format!("(the model reached its output limit{limit} twice before it wrote an answer)")));
+            }
             if !calls.is_empty() || agent.has_pending() {
                 continue;
             }

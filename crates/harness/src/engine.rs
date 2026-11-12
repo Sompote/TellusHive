@@ -213,7 +213,7 @@ impl Domain {
             // Claude Code or Codex runs as the model: its own login, its own default model
             let tools = if a.tools.iter().any(|t| t == "*") { ToolFilter::All } else { ToolFilter::Only(a.tools.clone()) };
             let model = if a.model.is_empty() { provider.default_model.clone() } else { a.model.clone() };
-            return Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: None, max_tokens: None, reasoning: None, max_steps: a.max_turns.max(1), tools, meta: json!({"color": a.color}) });
+            return Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: None, max_tokens: None, reasoning: None, max_steps: a.max_turns.max(1), time_limit: a.time_limit(), fail_limit: settings.harness.fail_limit, tools, meta: json!({"color": a.color}) });
         }
         if provider.key().is_none() && !provider.base_url.contains("localhost") && !provider.base_url.contains("127.0.0.1") {
             return Err(format!("No API key for provider '{}'. Add it in Settings (or set {}).", provider.name, provider.key_env));
@@ -231,7 +231,7 @@ impl Domain {
         let max_out = if provider.base_url.contains("api.deepseek.com") { 8192 } else { 32_000 };
         let tools = if a.tools.iter().any(|t| t == "*") { ToolFilter::All } else { ToolFilter::Only(a.tools.clone()) };
         let reasoning = thinking_for(a, &provider);
-        Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: Some(a.temperature), max_tokens: Some(max_out), reasoning, max_steps: a.max_turns.max(1), tools, meta: json!({"color": a.color}) })
+        Ok(AgentPreset { id: a.id.clone(), name: a.name.clone(), role: a.role.clone(), provider, model, temperature: Some(a.temperature), max_tokens: Some(max_out), reasoning, max_steps: a.max_turns.max(1), time_limit: a.time_limit(), fail_limit: settings.harness.fail_limit, tools, meta: json!({"color": a.color}) })
     }
 
     /// Calls one plugin tool. Pictures it returns are saved to images/; a live model the
@@ -510,7 +510,7 @@ mod tests {
     fn agent_thinking_falls_back_to_the_provider() {
         let p = th_llm::Provider::openrouter();
         let mut a = AgentSpec::default();
-        assert_eq!(thinking_for(&a, &p).as_deref(), Some("low"));
+        assert_eq!(thinking_for(&a, &p).as_deref(), Some("off"));
         a.thinking = "high".into();
         assert_eq!(thinking_for(&a, &p).as_deref(), Some("high"));
         a.thinking = "off".into();

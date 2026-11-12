@@ -47,6 +47,11 @@ pub struct AgentPreset {
     pub reasoning: Option<String>,
     /// Steps per turn before the loop stops it.
     pub max_steps: usize,
+    /// Wall-clock limit of one delegated task; None = no limit. When it passes the agent is
+    /// stopped and its parent gets what it has so far.
+    pub time_limit: Option<std::time::Duration>,
+    /// Failures of one tool in a row with the same error that end the turn; 0 = never.
+    pub fail_limit: usize,
     pub tools: ToolFilter,
     pub meta: Value,
 }
@@ -81,6 +86,7 @@ pub struct Agent {
     inbox: Mutex<VecDeque<Inbound>>,
     injected: Mutex<Vec<Inbound>>,
     status: Mutex<Status>,
+    halt: Mutex<Option<String>>,
     state: Mutex<HashMap<&'static str, Box<dyn Any + Send>>>,
 }
 
@@ -114,6 +120,17 @@ impl Agent {
 
     pub fn status(&self) -> Status {
         self.status.lock().map(|s| *s).unwrap_or(Status::Idle)
+    }
+
+    /// Asks the loop to end the turn after the current tool batch, with this reason.
+    pub fn halt(&self, why: impl Into<String>) {
+        if let Ok(mut h) = self.halt.lock() {
+            h.get_or_insert(why.into());
+        }
+    }
+
+    pub fn take_halt(&self) -> Option<String> {
+        self.halt.lock().ok().and_then(|mut h| h.take())
     }
 
     pub fn cancelled(&self) -> bool {
@@ -183,6 +200,7 @@ impl AgentRegistry {
             inbox: Mutex::new(VecDeque::new()),
             injected: Mutex::new(vec![]),
             status: Mutex::new(Status::Idle),
+            halt: Mutex::new(None),
             state: Mutex::new(HashMap::new()),
         });
         if let Ok(mut m) = self.agents.write() {

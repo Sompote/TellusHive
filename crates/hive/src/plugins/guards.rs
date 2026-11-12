@@ -21,12 +21,16 @@ struct Repeat {
     count: usize,
 }
 
+/// Failures in a row per tool: (error text, count).
+#[derive(Default)]
+struct Failing(std::collections::HashMap<String, (String, usize)>);
+
 impl Plugin for RepeatToolReminder {
     fn name(&self) -> String {
         "hive-repeat-tool-reminder".into()
     }
     fn describe(&self) -> String {
-        format!("advisory reminder at {:?} identical calls", self.thresholds)
+        format!("advisory reminder at {:?} identical calls; ends the turn when one tool fails the same way the agent's fail limit times in a row", self.thresholds)
     }
     fn inject(&self) -> Vec<&'static str> {
         vec![keys::TOOLS, keys::LOOP]
@@ -39,6 +43,28 @@ impl Plugin for RepeatToolReminder {
         let lp = ctx.expect::<AgentLoop>(keys::LOOP)?;
         let (th, ex) = (self.thresholds.clone(), self.exclude.clone());
         ctx.effect(tools.post_execute.on(false, move |p, next| {
+            // a tool that keeps failing the same way stops the agent: its parent hears why
+            let limit = p.agent.preset.fail_limit;
+            let err = p.output.is_error.then(|| crate::clip(&p.output.text, 300));
+            let n = p.agent.with_state::<Failing, _>("repeat-fail", |f| match &err {
+                Some(e) => {
+                    let slot = f.0.entry(p.tool.clone()).or_insert_with(|| (e.clone(), 0));
+                    if slot.0 != *e {
+                        *slot = (e.clone(), 0);
+                    }
+                    slot.1 += 1;
+                    slot.1
+                }
+                None => {
+                    f.0.remove(&p.tool);
+                    0
+                }
+            });
+            if limit > 0 && n >= limit {
+                p.agent.halt(format!("stopped: {} failed {n} times in a row with the same error: {}", p.tool, err.unwrap_or_default()));
+            } else if limit > 0 && n + 1 == limit {
+                p.output.additional_context.push(("plugin:repeat-tool-reminder".into(), format!("{} has now failed {n} times with the same error. Read the error and change the call; one more identical failure ends your task.", p.tool)));
+            }
             if !ex.contains(&p.tool) {
                 // serde_json maps are ordered by key, so property order does not matter
                 let key = format!("{}|{}", p.tool, p.args);
@@ -65,6 +91,7 @@ impl Plugin for RepeatToolReminder {
         ctx.effect(lp.pre_step.on(false, |ps, next| {
             if ps.messages.iter().any(|m| m.source == "user" || m.source == "parent") {
                 ps.agent.with_state::<Repeat, _>("repeat-tool", |r| *r = Repeat::default());
+                ps.agent.with_state::<Failing, _>("repeat-fail", |f| f.0.clear());
             }
             next(ps)
         }));

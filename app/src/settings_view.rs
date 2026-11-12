@@ -409,6 +409,24 @@ fn general_ui(ui: &mut egui::Ui, s: &mut Settings) {
             None => "No Python 3 found. Install it or give the full path to the interpreter.".to_string(),
         });
     });
+    group(ui, "Agent limits", "", |ui| {
+        let h = &mut s.harness;
+        ui.horizontal(|ui| {
+            chrome::row_label(ui, "Stop after failures");
+            ui.add_sized([80.0, 28.0], egui::DragValue::new(&mut h.fail_limit).range(0..=20));
+        });
+        chrome::hint(ui, "An agent whose tool fails this many times in a row with the same error is stopped, and the coordinator is told why. 0 = never stop.");
+        ui.horizontal(|ui| {
+            chrome::row_label(ui, "Stalled reply");
+            ui.add_sized([80.0, 28.0], egui::DragValue::new(&mut h.stall_s).range(0..=1800).suffix(" s"));
+        });
+        chrome::hint(ui, "A model reply that sends nothing for this long is abandoned and asked again. 0 = wait for ever.");
+        ui.horizontal(|ui| {
+            chrome::row_label(ui, "Longest reply");
+            ui.add_sized([80.0, 28.0], egui::DragValue::new(&mut h.reply_limit_min).range(0..=120).suffix(" min"));
+        });
+        chrome::hint(ui, "One model reply that runs longer than this is abandoned and asked again. 0 = no limit. The time limit of a whole delegated task is set per agent in Team.");
+    });
     group(ui, "Appearance", "", |ui| {
         chrome::switch_row(ui, "Dark theme", &mut s.dark);
     });
