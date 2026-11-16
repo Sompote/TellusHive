@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.6 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.6):
+Version 0.1.7 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.7):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.6-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.6/TellusHive-0.1.6-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.6-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.6/TellusHive-0.1.6-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.7-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.7/TellusHive-0.1.7-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.7-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.7/TellusHive-0.1.7-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,9 +32,23 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.6
+### What is new in 0.1.7
 
-Agents now think only when you ask them to, because every provider and agent starts with
+Agents now see the standards that fit their task before they start, because the **standards
+briefing** adds the library passages that match the engineer's request, and each delegated task,
+with their standard, clause and page. On 54 GeoTechBench items whose methods the library holds, a
+team on Claude Code solved 35 with the briefing against 26 without it (exact McNemar p = 0.022),
+whereas on 33 items drawn at random it changed nothing (31 against 31) and doubled the median run
+time, so it can be switched off under `harness.standards_briefing` in `settings.json`. Search
+results now carry how closely they match, and `search_standards` says so when no passage in the
+library matches a query, names the standards it holds and asks the agent to state its own source,
+instead of handing over the nearest passage as if it were the method. Values from calculations and
+programs are pinned so they survive compaction exactly, and `run_python` can re-run a saved script
+by name. When Claude Code or Codex runs as an agent's model, the agents it delegates to now use the
+project's own settings and team rather than the defaults of the computer, and API keys are passed
+to its tool server by reference, never written to disk.
+
+From 0.1.6, agents think only when you ask them to, because every provider and agent starts with
 **Thinking** off. In a pile-cap design run the Designer on DeepSeek V4.1 Flash through OpenRouter
 spent 85 to 176 s per step writing up to 90,000 characters of reasoning, even at the low setting,
 whereas with thinking off its steps took 2 to 13 s. The harness also stops an agent that is going
@@ -131,7 +145,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 96 tests, no API key needed
+cargo test --workspace     # 117 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
