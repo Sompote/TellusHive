@@ -75,7 +75,7 @@ flowchart TB
         HV --> EX["Claude Code / Codex"]
         HV --> LOG[("sessions/*.jsonl")]
     end
-    HV -->|"streamed chat completions + tools (th-llm)"| API["Model provider<br/>OpenRouter, DeepSeek, OpenAI, Ollama"]
+    HV -->|"streamed chat completions + tools (th-llm)"| API["Model provider<br/>OpenRouter, DeepSeek, OpenAI, Ollama, vLLM"]
 ```
 
 ## The agent harness (th-hive)
@@ -115,7 +115,7 @@ like `dsh --dump-config`:
 
 ```text
 - hive-core                   active   agents, agentLoop, llm, tools, systemPrompt, sessions
-- hive-llm-openai-compatible  active   DeepSeek, OpenRouter, Ollama, OpenAI (streamed chat completions)
+- hive-llm-openai-compatible  active   DeepSeek, OpenRouter, Ollama, OpenAI, vLLM local or remote (streamed chat completions)
 - hive-llm-retry              active   3 retries on 408/429/5xx and transport errors
 - hive-compaction             active   prune, then summarise above ~90k tokens; keeps the last 8 nodes
 - hive-repeat-tool-reminder   active   advisory reminder at [3, 5, 8] identical calls
@@ -148,7 +148,7 @@ whose pipeline has the `ask` decision and `approval` service but no window that 
 
 | Crate | What it does |
 |---|---|
-| `crates/llm` (`th-llm`) | OpenAI-compatible chat client with streamed replies, tool calls, image inputs, reasoning pass-back and embeddings. It works with DeepSeek, OpenRouter, Ollama, OpenAI or any compatible gateway. |
+| `crates/llm` (`th-llm`) | OpenAI-compatible chat client with streamed replies, tool calls, image inputs, reasoning pass-back and embeddings. It works with DeepSeek, OpenRouter, Ollama, OpenAI, vLLM (on this machine or a rented GPU such as Vast.ai) or any compatible gateway. |
 | `crates/mcp` (`th-mcp`) | Model Context Protocol client over stdio and Streamable HTTP, plus a small stdio server. |
 | `crates/kb` (`th-kb`) | The standards library: a local vector database with clause-aware chunking of PDF, text and Markdown. Search fuses vector and BM25 results and boosts exact clause numbers. |
 | `crates/eng` (`th-eng`) | The engineering engine: a traceable calculation sheet with an expression evaluator, verified design modules, 2D drawings (SVG and DXF R12) and PDF/Markdown reports. |

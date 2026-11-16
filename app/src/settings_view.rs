@@ -145,6 +145,13 @@ impl SettingsView {
                 chrome::password(ui, "API key", &mut p.api_key).on_hover_text(format!("Stored in the settings file (owner-only), or set the environment variable {}.", p.key_env));
                 chrome::field(ui, "Key variable", &mut p.key_env);
                 chrome::field(ui, "Default model", &mut p.default_model);
+                if p.is_vllm() {
+                    chrome::hint(ui, if p.name == "vllm-vast" || !p.is_local() {
+                        "vLLM on a rented GPU (Vast.ai). Base URL: http://<instance public IP>:<external port Vast maps to vLLM's port>/v1, from the instance's IP & port info. Start vLLM with --enable-auto-tool-choice --tool-call-parser <parser> so the agents can call tools, and with --api-key <key> (enter the same key here) because the port is open to the internet. Behind Vast's proxy the key is the instance's OPEN_BUTTON_TOKEN. Or tunnel it (ssh -L 8000:localhost:8000 ...) and use the local vllm provider. Empty Default model = the model the server serves."
+                    } else {
+                        "vLLM on this machine: vllm serve <model> --enable-auto-tool-choice --tool-call-parser <parser>. No key unless it was started with --api-key. Empty Default model = the model the server serves."
+                    });
+                }
                 ui.horizontal(|ui| {
                     chrome::row_label(ui, "Thinking");
                     let shown = THINKING.iter().find(|(v, _)| *v == p.thinking).map_or(p.thinking.as_str(), |(_, l)| *l).to_string();
@@ -154,7 +161,9 @@ impl SettingsView {
                         }
                     })
                     .response
-                    .on_hover_text(if p.base_url.contains("openrouter.ai") {
+                    .on_hover_text(if p.is_vllm() {
+                        "Switched through the model's chat template (Qwen3, DeepSeek V3.1: on or off) and reasoning_effort (gpt-oss). Start vLLM with --reasoning-parser <parser> to see the thinking apart from the reply."
+                    } else if p.base_url.contains("openrouter.ai") {
                         "How long the models think before each reply, for agents whose own Thinking is 'provider default'. Low keeps replies quick; raise it for hard design checks, or set it per agent in step 3 Team."
                     } else {
                         "Sent through OpenRouter's reasoning setting, so it applies only to OpenRouter; this provider's API does not take it."
@@ -163,6 +172,10 @@ impl SettingsView {
                 ui.horizontal(|ui| {
                     chrome::row_label(ui, "");
                     ui.checkbox(&mut p.vision, "Models accept images");
+                    let mut vllm = p.is_vllm();
+                    if ui.checkbox(&mut vllm, "vLLM server").on_hover_text("Thinking through the chat template, no output cap, no key needed unless the server has --api-key.").changed() {
+                        p.kind = if vllm { "vllm".into() } else { String::new() };
+                    }
                     if ui.add_enabled(self.models_rx.is_none(), egui::Button::new("List models")).clicked() {
                         let (tx, rx) = mpsc::channel();
                         self.models_rx = Some(rx);

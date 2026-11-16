@@ -361,7 +361,7 @@ pub fn describe_image(settings: &Settings, path: &std::path::Path, question: &st
     } else {
         question
     };
-    if let Some(p) = settings.provider(&settings.vision_provider).filter(|p| p.key().is_some() || p.base_url.contains("localhost")) {
+    if let Some(p) = settings.provider(&settings.vision_provider).filter(|p| !p.is_cli() && !p.unconfigured() && p.ready()) {
         let msg = th_llm::Message::user_parts(vec![th_llm::Part::Text { text: q.into() }, image_for_model(path)?]);
         let r = th_llm::chat(p, &settings.vision_model, &[msg], &[], &th_llm::ChatOptions::default())?;
         return Ok(r.message.text());

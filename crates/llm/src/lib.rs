@@ -1,7 +1,8 @@
 //! OpenAI-compatible chat-completions client with tool calls, image inputs and embeddings.
 //!
 //! One client talks to every provider that speaks the OpenAI wire format: DeepSeek (the
-//! default brain of the harness), OpenRouter, Ollama, OpenAI and any self-hosted gateway.
+//! default brain of the harness), OpenRouter, Ollama, OpenAI, vLLM (on this machine or a
+//! rented GPU such as Vast.ai) and any self-hosted gateway.
 //! The calls are blocking (ureq) because every agent already runs on its own thread.
 
 use std::time::Duration;
@@ -28,6 +29,9 @@ pub struct Provider {
     /// "" (the model's own default), "off", "low", "medium" or "high". Sent only to OpenRouter,
     /// whose unified `reasoning` field maps it to each model's own switch.
     pub thinking: String,
+    /// The server software when it needs its own handling: "vllm", or "" for any other
+    /// OpenAI-compatible API.
+    pub kind: String,
 }
 
 impl Default for Provider {
@@ -46,6 +50,7 @@ impl Provider {
             default_model: "deepseek-chat".into(),
             vision: false,
             thinking: "off".into(),
+            kind: String::new(),
         }
     }
     pub fn openrouter() -> Self {
@@ -57,6 +62,7 @@ impl Provider {
             default_model: "deepseek/deepseek-v4.1-flash-1017".into(),
             vision: true,
             thinking: "off".into(),
+            kind: String::new(),
         }
     }
     pub fn ollama() -> Self {
@@ -68,6 +74,7 @@ impl Provider {
             default_model: "qwen2.5:14b".into(),
             vision: false,
             thinking: "off".into(),
+            kind: String::new(),
         }
     }
     pub fn openai() -> Self {
@@ -79,27 +86,88 @@ impl Provider {
             default_model: "gpt-4.1-mini".into(),
             vision: true,
             thinking: "off".into(),
+            kind: String::new(),
         }
     }
-    /// Drops the fields this provider's API does not take: `reasoning` is OpenRouter's (an
-    /// API such as OpenAI's rejects an argument it does not know).
+    /// vLLM on this machine (`vllm serve <model> --enable-auto-tool-choice
+    /// --tool-call-parser <parser>`), or reached through an SSH tunnel to a rented GPU.
+    /// An empty default model means "the model the server serves".
+    pub fn vllm() -> Self {
+        Provider {
+            name: "vllm".into(),
+            base_url: "http://localhost:8000/v1".into(),
+            api_key: String::new(),
+            key_env: "VLLM_API_KEY".into(),
+            default_model: String::new(),
+            vision: false,
+            thinking: "off".into(),
+            kind: "vllm".into(),
+        }
+    }
+    /// vLLM on a rented Vast.ai GPU, reached at the instance's public IP and the external
+    /// port Vast maps to vLLM's port. The key is vLLM's `--api-key`, or the instance's
+    /// `OPEN_BUTTON_TOKEN` when the request goes through Vast's authenticating proxy.
+    pub fn vllm_vast() -> Self {
+        Provider { name: "vllm-vast".into(), base_url: VAST_PLACEHOLDER.into(), key_env: "VAST_VLLM_API_KEY".into(), ..Provider::vllm() }
+    }
+
+    pub fn is_vllm(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("vllm")
+    }
+
+    /// A server on this machine (no key needed).
+    pub fn is_local(&self) -> bool {
+        let u = self.base_url.to_ascii_lowercase();
+        ["://localhost", "://127.", "://[::1]", "://0.0.0.0"].iter().any(|h| u.contains(h))
+    }
+
+    /// Whether a call cannot go out without a key. Local servers and vLLM (which runs open
+    /// unless started with `--api-key`) can; a missing key then shows as the server's 401.
+    pub fn needs_key(&self) -> bool {
+        !self.is_cli() && !self.is_local() && !self.is_vllm()
+    }
+
+    /// Ready to call: a coding-agent program, or a key when one is needed.
+    pub fn ready(&self) -> bool {
+        !self.needs_key() || self.key().is_some()
+    }
+
+    /// The base URL still holds the preset's placeholder.
+    pub fn unconfigured(&self) -> bool {
+        self.base_url.contains('<')
+    }
+
+    /// Fits the request body to this provider's API. `reasoning` is OpenRouter's (an API such
+    /// as OpenAI's rejects an argument it does not know). vLLM switches thinking through the
+    /// model's chat template instead (`enable_thinking` for Qwen3, `thinking` for DeepSeek
+    /// V3.1; a template ignores a name it does not use) and `reasoning_effort` (gpt-oss).
     pub fn keep_only_known(&self, body: &mut Value) {
-        if !self.base_url.contains("openrouter.ai") {
-            if let Some(o) = body.as_object_mut() {
-                o.remove("reasoning");
+        if self.base_url.contains("openrouter.ai") {
+            return;
+        }
+        let Some(o) = body.as_object_mut() else { return };
+        let reasoning = o.remove("reasoning");
+        if !self.is_vllm() {
+            return;
+        }
+        if let Some(r) = reasoning {
+            let on = r.get("enabled") != Some(&Value::Bool(false));
+            o.insert("chat_template_kwargs".into(), json!({"enable_thinking": on, "thinking": on}));
+            if let Some(e) = r.get("effort").filter(|_| on) {
+                o.insert("reasoning_effort".into(), e.clone());
             }
         }
     }
     /// Claude Code run as the model (`claude -p`), on the user's Claude subscription.
     pub fn claude_code() -> Self {
-        Provider { name: "claude-code".into(), base_url: "cli://claude-code".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new() }
+        Provider { name: "claude-code".into(), base_url: "cli://claude-code".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new(), kind: String::new() }
     }
     /// Codex run as the model (`codex exec`), on the user's ChatGPT subscription.
     pub fn codex() -> Self {
-        Provider { name: "codex".into(), base_url: "cli://codex".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new() }
+        Provider { name: "codex".into(), base_url: "cli://codex".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new(), kind: String::new() }
     }
     pub fn presets() -> Vec<Provider> {
-        vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai(), Provider::claude_code(), Provider::codex()]
+        vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai(), Provider::vllm(), Provider::vllm_vast(), Provider::claude_code(), Provider::codex()]
     }
 
     /// A coding-agent program run in place of an API (no key, no HTTP).
@@ -125,6 +193,58 @@ impl Provider {
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url.trim_end_matches('/'), path)
     }
+}
+
+/// Base URL of the Vast.ai preset until the engineer enters the instance's address.
+pub const VAST_PLACEHOLDER: &str = "http://<vast-ip>:<port>/v1";
+
+/// The model a server serves, asked once per base URL (vLLM serves one model, under the
+/// name given by `--served-model-name`).
+fn served_model(p: &Provider) -> Result<String, String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(m) = cache.lock().ok().and_then(|c| c.get(&p.base_url).cloned()) {
+        return Ok(m);
+    }
+    let first = list_models_raw(p).map_err(|e| format!("{}: no model named, and the server's model list failed: {e}", p.name))?.into_iter().next();
+    let m = first.ok_or_else(|| format!("{}: no model named, and the server lists none", p.name))?;
+    if let Ok(mut c) = cache.lock() {
+        c.insert(p.base_url.clone(), m.clone());
+    }
+    Ok(m)
+}
+
+/// The model to call: the one asked for, else the provider's default, else the served one.
+pub fn resolve_model(p: &Provider, model: &str) -> Result<String, String> {
+    if p.unconfigured() {
+        return Err(format!("Set the Base URL of provider '{}' in Settings (for Vast.ai: http://<instance IP>:<external port mapped to vLLM>/v1).", p.name));
+    }
+    match [model, p.default_model.as_str()].into_iter().map(str::trim).find(|m| !m.is_empty()) {
+        Some(m) => Ok(m.to_string()),
+        None => served_model(p),
+    }
+}
+
+/// Adds the likely fix to a vLLM error.
+fn explain(p: &Provider, status: Option<u16>, msg: String) -> String {
+    if !p.is_vllm() {
+        return msg;
+    }
+    let low = msg.to_ascii_lowercase();
+    let hint = if status == Some(401) {
+        " (set this provider's API key: vLLM's --api-key, or the instance's OPEN_BUTTON_TOKEN behind Vast's proxy)"
+    } else if low.contains("enable-auto-tool-choice") || low.contains("tool-call-parser") || low.contains("tool choice") {
+        " (start vLLM with --enable-auto-tool-choice --tool-call-parser <hermes for Qwen, llama3_json, mistral, openai for gpt-oss, ...>)"
+    } else if status == Some(404) && low.contains("model") {
+        " (the model must match vLLM's --served-model-name; leave Default model empty to use the one it serves)"
+    } else if low.contains("connection refused") || low.contains("timed out") || low.contains("dns") {
+        " (is the vLLM server up? On Vast.ai use the instance's public IP and the external port mapped to vLLM's port)"
+    } else {
+        ""
+    };
+    format!("{msg}{hint}")
 }
 
 // ------------------------------------------------------------------ messages
@@ -396,8 +516,8 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// One chat-completions call. Retries twice on rate limits and server errors.
 pub fn chat(p: &Provider, model: &str, messages: &[Message], tools: &[ToolSpec], opt: &ChatOptions) -> Result<Reply, String> {
-    let model = if model.is_empty() { p.default_model.as_str() } else { model };
-    let mut body = request_body(model, messages, tools, opt);
+    let model = resolve_model(p, model)?;
+    let mut body = request_body(&model, messages, tools, opt);
     p.keep_only_known(&mut body);
     let a = agent(opt.timeout);
     let mut last = String::new();
@@ -420,7 +540,13 @@ pub fn chat(p: &Provider, model: &str, messages: &[Message], tools: &[ToolSpec],
             Err(ureq::Error::Status(code, r)) if code == 429 || code >= 500 => {
                 last = http_error(ureq::Error::Status(code, r));
             }
-            Err(e) => return Err(format!("{}: {}", p.name, http_error(e))),
+            Err(e) => {
+                let status = match &e {
+                    ureq::Error::Status(c, _) => Some(*c),
+                    _ => None,
+                };
+                return Err(explain(p, status, format!("{}: {}", p.name, http_error(e))));
+            }
         }
     }
     Err(format!("{}: {last}", p.name))
@@ -561,8 +687,8 @@ pub fn chat_stream(p: &Provider, model: &str, messages: &[Message], tools: &[Too
     use std::io::BufRead;
     use std::sync::atomic::Ordering;
     let err = |message: String, status: Option<u16>| CallError { overflow: is_overflow(&message), message, status, cancelled: false };
-    let model = if model.is_empty() { p.default_model.as_str() } else { model };
-    let mut body = request_body(model, messages, tools, opt);
+    let model = resolve_model(p, model).map_err(|m| err(m, None))?;
+    let mut body = request_body(&model, messages, tools, opt);
     p.keep_only_known(&mut body);
     body["stream"] = json!(true);
     body["stream_options"] = json!({"include_usage": true});
@@ -584,8 +710,8 @@ pub fn chat_stream(p: &Provider, model: &str, messages: &[Message], tools: &[Too
     }
     let resp = match req.send_json(body) {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, r)) => return Err(err(format!("{}: {}", p.name, http_error(ureq::Error::Status(code, r))), Some(code))),
-        Err(e) => return Err(err(format!("{}: {}", p.name, http_error(e)), None)),
+        Err(ureq::Error::Status(code, r)) => return Err(err(explain(p, Some(code), format!("{}: {}", p.name, http_error(ureq::Error::Status(code, r)))), Some(code))),
+        Err(e) => return Err(err(explain(p, None, format!("{}: {}", p.name, http_error(e))), None)),
     };
     let mut fold = StreamFold::default();
     let (start, mut last_data) = (std::time::Instant::now(), std::time::Instant::now());
@@ -645,6 +771,13 @@ pub fn list_models(p: &Provider) -> Result<Vec<String>, String> {
     if p.is_cli() {
         return Ok(vec![]);
     }
+    if p.unconfigured() {
+        return Err(format!("Set the Base URL of provider '{}' first.", p.name));
+    }
+    list_models_raw(p).map_err(|e| explain(p, None, e))
+}
+
+fn list_models_raw(p: &Provider) -> Result<Vec<String>, String> {
     let a = agent(Duration::from_secs(20));
     let mut req = a.get(&p.url("models"));
     if let Some(k) = p.key() {
@@ -713,6 +846,63 @@ mod tests {
         assert_eq!(old.thinking, "off");
         assert_eq!(Provider::openrouter().thinking, "off");
         assert!(Provider::claude_code().thinking.is_empty());
+    }
+
+    /// vLLM gets thinking through the chat template and gpt-oss's reasoning_effort, never
+    /// OpenRouter's `reasoning` field.
+    #[test]
+    fn vllm_thinking_goes_through_the_template() {
+        let p = Provider::vllm();
+        let mut b = request_body("m", &[], &[], &ChatOptions { reasoning: Some("off".into()), ..Default::default() });
+        p.keep_only_known(&mut b);
+        assert!(b.get("reasoning").is_none());
+        assert_eq!(b["chat_template_kwargs"], json!({"enable_thinking": false, "thinking": false}));
+        assert!(b.get("reasoning_effort").is_none());
+        let mut b = request_body("m", &[], &[], &ChatOptions { reasoning: Some("high".into()), ..Default::default() });
+        p.keep_only_known(&mut b);
+        assert_eq!(b["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(b["reasoning_effort"], "high");
+        let mut b = request_body("m", &[], &[], &ChatOptions::default());
+        p.keep_only_known(&mut b);
+        assert!(b.get("chat_template_kwargs").is_none(), "provider default leaves the template alone");
+    }
+
+    /// Local servers and vLLM run without a key; a remote API needs one; the Vast preset
+    /// asks for its address before any call goes out.
+    #[test]
+    fn which_providers_need_a_key() {
+        assert!(!Provider::ollama().needs_key());
+        assert!(!Provider::vllm().needs_key());
+        let vast = Provider { base_url: "http://203.0.113.7:41234/v1".into(), ..Provider::vllm_vast() };
+        assert!(!vast.needs_key() && vast.ready() && !vast.is_local());
+        assert!(Provider::openai().needs_key());
+        assert!(!Provider::claude_code().needs_key());
+        assert!(Provider::vllm_vast().unconfigured());
+        assert!(resolve_model(&Provider::vllm_vast(), "").unwrap_err().contains("Base URL"));
+        assert_eq!(resolve_model(&Provider::vllm(), "Qwen/Qwen3-32B").unwrap(), "Qwen/Qwen3-32B");
+        let old: Provider = serde_json::from_value(json!({"name": "x", "base_url": "https://a/v1"})).unwrap();
+        assert!(!old.is_vllm());
+        let e = explain(&Provider::vllm(), Some(400), "vllm: HTTP 400: \"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set".into());
+        assert!(e.contains("--tool-call-parser <hermes"), "{e}");
+    }
+
+    /// With no model named, the call uses the one the server lists.
+    #[test]
+    fn empty_model_uses_the_served_one() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = c.read(&mut buf).unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n]).starts_with("GET /v1/models"));
+            let body = r#"{"object":"list","data":[{"id":"qwen3-32b","max_model_len":32768}]}"#;
+            let _ = c.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes());
+        });
+        let p = Provider { base_url: format!("http://127.0.0.1:{port}/v1"), ..Provider::vllm() };
+        assert_eq!(resolve_model(&p, "").unwrap(), "qwen3-32b");
+        assert_eq!(resolve_model(&p, " ").unwrap(), "qwen3-32b", "asked once, then cached");
     }
 
     #[test]
