@@ -75,6 +75,38 @@ Claude Code and 14 s on Codex. Each Claude Code step carries the program's own s
 and tools, about 116k input tokens, most of them read from its cache, and Codex runs report no
 token counts.
 
+## Your own model on vLLM
+
+An agent can run on an open-weight model that you serve yourself with vLLM, on this computer or on
+a GPU rented from a service such as Vast.ai. Start the server with tool calling switched on,
+because the agents work through tools and vLLM refuses a request with tools otherwise:
+
+```sh
+vllm serve Qwen/Qwen3-32B --enable-auto-tool-choice --tool-call-parser hermes \
+  --reasoning-parser qwen3 --max-model-len 32768 --api-key <key>
+```
+
+The tool-call parser depends on the model (`hermes` for Qwen, `llama3_json` for Llama, `mistral`
+for Mistral, `openai` for gpt-oss), and the reasoning parser keeps the model's thinking apart from
+its reply. For a server on this computer, choose the `vllm` provider, whose address is
+`http://localhost:8000/v1`, and leave the key empty unless the server has `--api-key`. For a Vast.ai
+instance, open the `vllm-vast` provider and set its **Base URL** to
+`http://<instance public IP>:<external port>/v1`, where the external port is the one Vast maps to
+vLLM's port in the instance's IP and port list, and enter the same key as `--api-key`, because
+that port is open to the internet. Behind Vast's own authenticating proxy the key is the
+instance's `OPEN_BUTTON_TOKEN`. An SSH tunnel (`ssh -L 8000:localhost:8000 -p <port> root@<ip>`)
+avoids the open port altogether, and the local `vllm` provider then reaches the instance.
+
+When **Default model** is empty, the agents use the model the server lists at `/v1/models`, which
+is looked up once per address, so restart TellusHive after you load a different model at the same
+address. **Thinking** reaches the model through its chat template (`enable_thinking` for Qwen3,
+`thinking` for DeepSeek V3.1) and through `reasoning_effort` for gpt-oss. vLLM gets no output cap,
+because a request whose prompt plus cap exceeds `--max-model-len` is refused, so a reply may fill
+whatever context the prompt leaves, and a model served with a short context is compacted sooner.
+Any other OpenAI-compatible provider becomes a vLLM provider with its **vLLM server** switch.
+This release has not been benchmarked on any vLLM model, so run a short task on the model you
+serve and check that it calls the tools correctly before you give it a design.
+
 ## Token use
 
 The window counts tokens while the agents work. The top bar shows the running total of the task

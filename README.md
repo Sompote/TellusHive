@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.7 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.7):
+Version 0.1.8 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.8):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.7-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.7/TellusHive-0.1.7-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.7-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.7/TellusHive-0.1.7-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.8-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.8/TellusHive-0.1.8-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.8-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.8/TellusHive-0.1.8-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,9 +32,23 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.7
+### What is new in 0.1.8
 
-Agents now see the standards that fit their task before they start, because the **standards
+Agents can now run on an open-weight model served by **vLLM**, either on your own computer or on a
+GPU rented from a service such as Vast.ai, so a design office can keep its data on hardware it
+controls and pay for GPU hours instead of tokens. **Settings** has two new providers, `vllm` at
+`http://localhost:8000/v1` and `vllm-vast` for a remote instance, and a **vLLM server** switch
+turns any other OpenAI-compatible provider into one. A vLLM provider needs no key unless the
+server was started with `--api-key`, and when its **Default model** is empty the agents use the
+model the server lists, so the name need not match `--served-model-name` by hand. Thinking is
+switched through the model's chat template (Qwen3, DeepSeek V3.1) and `reasoning_effort`
+(gpt-oss), because vLLM ignores OpenRouter's reasoning field. vLLM gets no output cap, since a
+32,000-token cap on a model served with a 32k context would fail every request as a false context
+overflow, and its common errors (tool calling not enabled, a wrong model name, a missing key or an
+unreachable server) now come with the likely fix. The [user guide](docs/guide.md#your-own-model-on-vllm)
+gives the server command and the Vast.ai settings.
+
+From 0.1.7, agents see the standards that fit their task before they start, because the **standards
 briefing** adds the library passages that match the engineer's request, and each delegated task,
 with their standard, clause and page. On 54 GeoTechBench items whose methods the library holds, a
 team on Claude Code solved 35 with the briefing against 26 without it (exact McNemar p = 0.022),
@@ -79,8 +93,10 @@ design office** in step **3 Team** to get the new wording, then add your changes
 ## How to use
 
 1. **Add a model.** Open **Settings** (the gear at the top right) and paste an API key for
-   OpenRouter or DeepSeek. Without a key, give an agent the provider `claude-code` or `codex` in
-   the Team step, and it runs on your Claude Code or Codex login instead.
+   OpenRouter or DeepSeek, or enter the address of your own vLLM server (the `vllm` provider on
+   this computer, `vllm-vast` on a rented GPU). Without a key, give an agent the provider
+   `claude-code` or `codex` in the Team step, and it runs on your Claude Code or Codex login
+   instead.
 2. **Make a project.** On the **Home** page, start from an example, a template or a one-line
    brief. Step **1 Project** holds the description and the notes every agent reads.
 3. **Choose the standards.** In step **2 Standards**, import the codes you design to (PDF, text
@@ -127,7 +143,8 @@ cargo build --release
 
 The last command opens the window. Add a provider key in **Settings**, or set
 `OPENROUTER_API_KEY` or `DEEPSEEK_API_KEY` before starting it. Without any key, choose the
-provider `claude-code` or `codex` and the agents run on your Claude Code or Codex login instead. The [user guide](docs/guide.md)
+provider `claude-code` or `codex` and the agents run on your Claude Code or Codex login instead,
+or point the `vllm` provider at your own vLLM server. The [user guide](docs/guide.md)
 explains the workspaces, the team canvas, templates and the engineering programs.
 
 ### Other commands
@@ -145,7 +162,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 117 tests, no API key needed
+cargo test --workspace     # 120 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
