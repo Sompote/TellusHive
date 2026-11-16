@@ -17,6 +17,7 @@ use serde_json::Value;
 use th_llm::{Content, FunctionCall, Message, Part, ToolCall};
 
 use crate::events::Emit;
+use crate::facts::{self, FactRecord};
 
 pub type Seq = u64;
 
@@ -297,6 +298,17 @@ impl Session {
         })
     }
 
+    /// Every pinned fact set in the log, oldest first (`custom` events of kind `facts/set`).
+    pub fn fact_records(&self) -> Vec<FactRecord> {
+        let Ok(evs) = self.events.read() else { return vec![] };
+        evs.iter()
+            .filter_map(|e| match &e.body {
+                EventBody::Custom { kind, data } if kind == facts::KIND => serde_json::from_value(data.clone()).ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The surface: message-producing nodes after replacements and pruning, with their seqs.
     fn surface(&self) -> Vec<(Seq, Node)> {
         let evs = self.events.read().map(|e| e.clone()).unwrap_or_default();
@@ -330,10 +342,19 @@ impl Session {
                 _ => {}
             }
         }
+        // a pruned result keeps the values it pinned, unless a later run replaced them
+        let records = if pruned.is_empty() { vec![] } else { self.fact_records() };
         for (seq, n) in surface.iter_mut() {
             if let Node::Result { text, .. } = n {
                 if pruned.contains(seq) {
                     *text = format!("{}\n…[older tool output removed to save context]", crate::clip(text, 400));
+                    for r in records.iter().filter(|r| r.source == *seq) {
+                        if facts::superseded(&records, r) {
+                            text.push_str(&format!("\n[Its values were replaced by a later run of {}]", r.set.group));
+                        } else {
+                            text.push_str(&format!("\n[Pinned values, copied exactly from this output]\n{}", facts::render(r)));
+                        }
+                    }
                 }
             }
         }
@@ -501,6 +522,32 @@ mod tests {
         let m = s.derive_messages(DeriveOptions::default());
         assert_eq!(m[0].text(), "summary");
         assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn pruned_result_keeps_its_pinned_values() {
+        use crate::facts::{Fact, FactRecord, FactSet, KIND};
+        let s = s();
+        s.append(user("design B1"));
+        let fact = |source, tool: &str, v: &str| EventBody::Custom {
+            kind: KIND.into(),
+            data: serde_json::to_value(FactRecord { source, tool: tool.into(), set: FactSet { group: "calcs/B1".into(), origin: "calcs/B1.json".into(), headline: String::new(), facts: vec![Fact::new("result", "M_u", v, "kN*m")] } }).unwrap(),
+        };
+        s.append(asst("", vec![CallRecord { id: "c1".into(), name: "calc_sheet".into(), arguments: "{}".into() }], None));
+        let r1 = s.append(EventBody::ToolResult { id: "c1".into(), name: "calc_sheet".into(), text: format!("{} M_u = 120.5", "x".repeat(2000)), is_error: false, meta: Value::Null });
+        s.append(fact(r1, "calc_sheet", "120.5"));
+        // while the result is whole, nothing is added to it
+        assert!(!s.derive_messages(DeriveOptions::default())[2].text().contains("Pinned values"));
+        s.append(EventBody::ToolPrune { seqs: vec![r1] });
+        let t = s.derive_messages(DeriveOptions::default())[2].text();
+        assert!(t.contains("removed to save context") && t.ends_with("calcs/B1.json [calc_sheet]\n  results: M_u = 120.5 kN*m"), "{t}");
+        // a later run replaces the values, and the old pruned result says so
+        s.append(asst("", vec![CallRecord { id: "c2".into(), name: "calc_sheet".into(), arguments: "{}".into() }], None));
+        let r2 = s.append(EventBody::ToolResult { id: "c2".into(), name: "calc_sheet".into(), text: "M_u = 131.2".into(), is_error: false, meta: Value::Null });
+        s.append(fact(r2, "calc_sheet", "131.2"));
+        let m = s.derive_messages(DeriveOptions::default());
+        assert!(m[2].text().ends_with("[Its values were replaced by a later run of calcs/B1]") && !m[2].text().contains("M_u = 120.5 kN*m"), "{}", m[2].text());
+        assert_eq!(m[4].text(), "M_u = 131.2");
     }
 
     #[test]

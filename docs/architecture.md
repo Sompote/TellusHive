@@ -92,7 +92,10 @@ dsh packages. The table lists each part with the dsh package it is developed fro
 | `tools` | The tool registry and its pipeline: `tools/pre-execute`, monotonic guards, `tools/execute`, `tools/post-execute` in model order, `tools/result`; concurrent calls of one reply run together | `core/tools`, tool executor |
 | `llm` | The model seam with the `llm/stream` waterfall and the OpenAI-compatible adapter (streamed, DeepSeek reasoning sent back inside a turn) | `llm/llm`, `llm-deepseek` |
 | `prompt` | Ordered prompt sections and the `system-prompt/assemble` waterfall | `core/system-prompt` |
-| `plugins::compaction` | Prunes old tool results under pressure, then summarises the older history into one logged replacement message | `dsh-compaction-basic` |
+| `plugins::compaction` | Prunes old tool results under pressure, then summarises the older history into one logged replacement message, followed by the pinned values of the results it replaced | `dsh-compaction-basic` |
+| `facts` | Values a tool pins to its result (`facts/set` custom events, each with the seq of its `tool/result`). `calc_sheet` and `run_design_module` pin their inputs, step values and checks, and MCP programs pin the numbers of their results as written (`th-harness` `pins.rs`: JSON values by path, or the text lines that hold a number; set-up calls and whole-model dumps pin nothing). They come back exactly when the result is pruned or summarised | TellusHive addition |
+| `plugins::audit` | Before a turn ends, every number of three or more significant digits in the answer is matched against the pinned values in force and the numbers the engineer gave; unmatched ones are sent back once for verification (`facts/audit` events). On whenever fact pinning is on | TellusHive addition |
+| `team_memory` (th-harness, option `harness.team_memory`) | Every delegated task is followed by the engineer's request word for word and the most relevant grounded records (the engineer's messages and pinned tool results, never agents' claims), ranked by the configured embedder; the `team_memory` tool searches the same records | TellusHive addition |
 | `plugins::guards` | Repeat-tool reminder, continuation of a turn that stopped too early, spill of long outputs to a file | `dsh-repeat-tool-reminder`, `dsh-spill` |
 | `plugins::llm` | Retry of rate limits, server errors and broken streams | `llm-retry` |
 | `plugins::todo` | `todo_write`, a whole-list todo kept as a durable event | `dsh-tool-todo` |
@@ -132,8 +135,9 @@ like `dsh --dump-config`:
 ```
 
 The `harness` block of `settings.json` holds the base bundle's settings (compaction budget,
-parallel calls, spill size, repeat thresholds, retries) and `disabled_plugins`, which leaves
-named plugins out of the tree, as a dsh profile patch does.
+parallel calls, spill size, repeat thresholds, retries), `pin_facts` (on by default),
+`team_memory` (off by default) and `disabled_plugins`, which leaves named plugins out of the
+tree, as a dsh profile patch does.
 
 Some parts of DeepSeek Harness are deliberately not ported. The `dsh_session_log` extension,
 which uploads session logs to DeepSeek, is left out so that logs stay on the engineer's

@@ -7,6 +7,7 @@
 //!   unwinds when they unload.
 //! - [`events`]: typed hook points with the Cordis dispatch modes (emit, waterfall, bail).
 //! - [`session`]: the append-only JSONL session log; the model's history is derived from it.
+//! - [`facts`]: values a tool pins to its result, so they survive compaction exactly.
 //! - [`agent`], [`agent_loop`]: live agents and the turn/step driver with its hooks
 //!   (`agent/pre-step`, `agent/request`, `agent/request-error`, `agent/turn-stopping`).
 //! - [`tools`]: the tool registry and its guarded execution pipeline.
@@ -23,6 +24,7 @@ pub mod agent;
 pub mod agent_loop;
 pub mod context;
 pub mod events;
+pub mod facts;
 pub mod llm;
 pub mod plugins;
 pub mod prompt;
@@ -37,6 +39,7 @@ pub use agent::{Agent, AgentPreset, AgentRegistry, Inbound, Status, StreamEvent,
 pub use agent_loop::{AgentLoop, ErrorAction, PreStep, RequestControls, RequestError, TurnOutcome, TurnStopping};
 pub use context::{fn_plugin, Context, Plugin, PluginStatus};
 pub use events::{Bail, Disposer, Emit, Waterfall};
+pub use facts::{Fact, FactRecord, FactSet};
 pub use llm::{LlmAdapter, LlmRequest, LlmService};
 pub use plugins::BaseConfig;
 pub use prompt::SystemPrompt;

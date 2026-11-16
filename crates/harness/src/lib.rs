@@ -7,8 +7,11 @@ pub mod config;
 pub mod engine;
 pub mod external;
 pub mod live;
+pub mod pins;
 pub mod project;
 pub mod skills;
+pub mod standards_briefing;
+pub mod team_memory;
 pub mod template;
 pub mod tools;
 
@@ -45,6 +48,30 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
     let project = Project::open_or_create(project_dir)?;
     let library = Arc::new(th_kb::Library::open(&th_kb::Library::default_root())?);
     let team = TeamSpec::load(&project.info.team);
+    // what this server runs with, since its environment comes from the coding agent: a wrong
+    // data folder silently gives the engineer's own settings and team
+    {
+        let file = TeamSpec::dir().join(TeamSpec::file_name(&project.info.team));
+        let source = match crate::config::read_json::<TeamSpec>(&file) {
+            Ok(_) => format!("file {}", file.display()),
+            Err(e) => format!("BUILT-IN FALLBACK ({e})"),
+        };
+        let agents: Vec<String> = team.agents.iter().map(|a| format!("{}={}", a.id, if a.provider.is_empty() { format!("(default {}/{})", settings.default_provider, settings.default_model) } else { a.provider.clone() })).collect();
+        let line = format!(
+            "{} pid {} agent {agent_id} data {} TELLUSHIVE_HOME {:?} team '{}' from {source}: {}\n",
+            crate::engine::stamp(),
+            std::process::id(),
+            crate::config::data_dir().display(),
+            std::env::var("TELLUSHIVE_HOME").ok(),
+            project.info.team,
+            agents.join(", ")
+        );
+        let _ = std::fs::create_dir_all(project.dir.join("sessions"));
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(project.dir.join("sessions/mcp-server.log")) {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
     let spec = team.agent(agent_id).cloned().ok_or_else(|| format!("no agent '{agent_id}' in the team"))?;
     let engine = Arc::new(Engine::new(settings, team, project.clone(), library, Arc::new(Plugins::default())));
     let ctx = engine.hive.ctx.clone();

@@ -2,7 +2,8 @@
 //! starts a local child agent on its own session (a fresh context, linked to the parent's
 //! session) or hands the task to an external program. The model-facing `delegate` tool is
 //! concurrent, so several delegations in one reply run at the same time;
-//! `delegate_parallel` gives the same in one call.
+//! `delegate_parallel` gives the same in one call. The facts a child pinned go up with its
+//! answer, so a coordinator holds the values of the work it delegated.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -13,6 +14,7 @@ use serde_json::{json, Value};
 use crate::agent::{Agent, AgentPreset, AgentRegistry, Inbound};
 use crate::agent_loop::AgentLoop;
 use crate::context::{Context, Plugin};
+use crate::facts::FactSet;
 use crate::keys;
 use crate::session::SessionMeta;
 use crate::store::SessionStore;
@@ -26,6 +28,11 @@ pub trait SubagentProvider: Send + Sync {
     fn role(&self) -> String;
     /// Runs the task to completion and returns the answer.
     fn run(&self, ctx: &Context, parent: &Arc<Agent>, task: &str) -> Result<String, String>;
+    /// The answer and the facts the task pinned, which are promoted to the parent's session
+    /// with the delegation's result. Providers without a session of their own pin nothing.
+    fn run_facts(&self, ctx: &Context, parent: &Arc<Agent>, task: &str) -> Result<(String, Vec<FactSet>), String> {
+        self.run(ctx, parent, task).map(|t| (t, vec![]))
+    }
 }
 
 pub type ProviderSource = dyn Fn(&Agent) -> Vec<Arc<dyn SubagentProvider>> + Send + Sync;
@@ -68,12 +75,13 @@ impl Subagents {
         out
     }
 
-    pub fn delegate(&self, ctx: &Context, parent: &Arc<Agent>, to: &str, task: &str) -> Result<String, String> {
+    /// Runs a delegated task; returns the answer and the facts the child pinned.
+    pub fn delegate(&self, ctx: &Context, parent: &Arc<Agent>, to: &str, task: &str) -> Result<(String, Vec<FactSet>), String> {
         if parent.depth + 1 > self.max_depth {
             return Err("delegation is too deep; do this task yourself".into());
         }
         let p = self.for_agent(parent).into_iter().find(|p| p.id() == to).ok_or_else(|| format!("{} may not delegate to '{to}'", parent.preset.name))?;
-        p.run(ctx, parent, task)
+        p.run_facts(ctx, parent, task)
     }
 }
 
@@ -93,6 +101,10 @@ impl SubagentProvider for ChildAgent {
         self.preset.role.clone()
     }
     fn run(&self, ctx: &Context, parent: &Arc<Agent>, task: &str) -> Result<String, String> {
+        self.run_facts(ctx, parent, task).map(|(t, _)| t)
+    }
+
+    fn run_facts(&self, ctx: &Context, parent: &Arc<Agent>, task: &str) -> Result<(String, Vec<FactSet>), String> {
         let store = ctx.expect::<SessionStore>(keys::SESSIONS)?;
         let agents = ctx.expect::<AgentRegistry>(keys::AGENTS)?;
         let lp = ctx.expect::<AgentLoop>(keys::LOOP)?;
@@ -122,8 +134,11 @@ impl SubagentProvider for ChildAgent {
         });
         agents.remove(&child.id);
         let out = r?;
+        // the values the child pinned and still holds go up with its answer
+        let records = child.session.fact_records();
+        let facts: Vec<FactSet> = crate::facts::current(&records).into_iter().map(|r| r.set.clone()).collect();
         match out.reason.as_str() {
-            "completed" | "max-steps" => Ok(out.text),
+            "completed" | "max-steps" => Ok((out.text, facts)),
             "cancelled" if timed_out.load(Ordering::Relaxed) => {
                 let min = self.preset.time_limit.map(|l| l.as_secs_f64() / 60.0).unwrap_or_default();
                 let got = if out.text.trim().is_empty() { "no answer yet".to_string() } else { format!("its answer so far:\n{}", out.text) };
@@ -147,7 +162,7 @@ fn delegate_tool(subs: Arc<Subagents>, ids: Vec<String>) -> ToolDef {
         move |t, a: Value| {
             let to = a.get("agent").and_then(|v| v.as_str()).ok_or("missing 'agent'")?;
             let task = a.get("task").and_then(|v| v.as_str()).ok_or("missing 'task'")?;
-            subs.delegate(&t.ctx, &t.agent, to, task).map(ToolOutput::ok)
+            subs.delegate(&t.ctx, &t.agent, to, task).map(|(text, facts)| ToolOutput { text, facts, ..Default::default() })
         },
     )
     .concurrent()
@@ -168,11 +183,22 @@ fn parallel_tool(subs: Arc<Subagents>, ids: Vec<String>) -> ToolDef {
                 .map(|t| (t.get("agent").and_then(|v| v.as_str()).unwrap_or("").to_string(), t.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string()))
                 .collect();
             let subs = &subs;
-            let results: Vec<(String, Result<String, String>)> = std::thread::scope(|sc| {
+            let results: Vec<(String, Result<(String, Vec<FactSet>), String>)> = std::thread::scope(|sc| {
                 let hs: Vec<_> = tasks.iter().map(|(to, task)| (to.clone(), sc.spawn(move || subs.delegate(&t.ctx, &t.agent, to, task)))).collect();
                 hs.into_iter().map(|(to, h)| (to, h.join().unwrap_or_else(|_| Err("agent thread panicked".into())))).collect()
             });
-            Ok(ToolOutput::ok(results.into_iter().map(|(to, r)| format!("## {to}\n{}", r.unwrap_or_else(|e| format!("ERROR: {e}")))).collect::<Vec<_>>().join("\n\n")))
+            let mut facts = vec![];
+            let mut parts = vec![];
+            for (to, r) in results {
+                match r {
+                    Ok((text, f)) => {
+                        facts.extend(f);
+                        parts.push(format!("## {to}\n{text}"));
+                    }
+                    Err(e) => parts.push(format!("## {to}\nERROR: {e}")),
+                }
+            }
+            Ok(ToolOutput { text: parts.join("\n\n"), facts, ..Default::default() })
         },
     )
     .concurrent()

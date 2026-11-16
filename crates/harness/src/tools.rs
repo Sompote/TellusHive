@@ -4,7 +4,9 @@
 
 use std::path::PathBuf;
 
+use th_eng::expr::fmt4;
 use th_eng::{calc, design, drawing, report};
+use th_hive::{Fact, FactSet};
 use th_kb::Library;
 use th_llm::ToolSpec;
 use serde_json::{json, Value};
@@ -27,12 +29,56 @@ pub struct Ctx<'a> {
 pub struct ToolOut {
     pub text: String,
     pub artifacts: Vec<(ArtifactKind, PathBuf)>,
+    /// Values pinned to the result, which the harness shows again after compaction.
+    pub facts: Vec<FactSet>,
 }
 
 impl ToolOut {
     fn text(s: impl Into<String>) -> Self {
-        ToolOut { text: s.into(), artifacts: vec![] }
+        ToolOut { text: s.into(), ..Default::default() }
     }
+}
+
+/// The inputs, step values and checks of a saved calculation sheet as pinned facts. Inputs
+/// keep the value as it was given; computed values and checks carry the figures the sheet
+/// itself prints (4 significant figures). A sheet saved again under the same name replaces
+/// the earlier set.
+pub fn sheet_facts(name: &str, sheet: &calc::Sheet, summary: Option<&str>) -> FactSet {
+    let mut facts = vec![];
+    for v in &sheet.inputs {
+        facts.push(Fact::new("input", &v.symbol, format!("{}", v.value), &v.unit));
+    }
+    // headline results: those a design module's summary reports, or, for a free sheet, the
+    // last step and every checked step
+    let shown: Vec<th_hive::facts::Shown> = summary.map(th_hive::facts::numbers).unwrap_or_default();
+    let last = sheet.steps.len().saturating_sub(1);
+    for (i, s) in sheet.steps.iter().enumerate() {
+        let v = fmt4(s.value);
+        let key = match summary {
+            Some(_) => th_hive::facts::numbers(&v).first().is_some_and(|x| shown.iter().any(|y| th_hive::facts::same_number(*x, *y))),
+            None => i == last || s.check.is_some(),
+        };
+        let f = Fact::new("result", &s.symbol, v, &s.unit).note(&s.reference);
+        facts.push(if key { f.key() } else { f });
+    }
+    for s in &sheet.steps {
+        if let Some(c) = &s.check {
+            let label = if c.label.trim().is_empty() { &s.symbol } else { &c.label };
+            let rel = if c.pass { "<=" } else { ">" };
+            facts.push(Fact::new("check", label, if c.pass { "PASS" } else { "FAIL" }, "").note(format!("demand {} {rel} capacity {}, ratio {:.3}", fmt4(c.demand), fmt4(c.capacity), c.ratio)));
+        }
+    }
+    let verdict = if sheet.checks().is_empty() {
+        "no checks"
+    } else if sheet.all_pass {
+        "all checks pass"
+    } else {
+        "SOME CHECKS FAIL"
+    };
+    let mut head: Vec<&str> = vec![&sheet.title, &sheet.standard];
+    head.push(verdict);
+    head.retain(|s| !s.trim().is_empty());
+    FactSet { group: format!("calcs/{name}"), origin: format!("calcs/{name}.json"), headline: head.join("; "), facts }
 }
 
 fn spec(name: &str, description: &str, parameters: Value) -> ToolSpec {
@@ -117,7 +163,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         ),
         spec(
             "run_python",
-            "Run a Python 3 script on this computer and return its printed output. Give either `code` (saved as work/py/<name>.py so the calculation stays traceable) or `skill` + `file` to run a script that ships with one of your skills. The working directory is the project's work/ folder; files the script writes there (CSV, PNG plots, JSON) are reported back. numpy, scipy, pandas and matplotlib (Agg backend) are usually installed. Print every result you will report, with units.",
+            "Run a Python 3 script on this computer and return its printed output. Give `code` (saved as work/py/<name>.py so the calculation stays traceable), or only the `name` of a script saved by an earlier call to run it again (with new `args` if needed), or `skill` + `file` to run a script that ships with one of your skills. The working directory is the project's work/ folder; files the script writes there (CSV, PNG plots, JSON) are reported back. numpy, scipy, pandas and matplotlib (Agg backend) are usually installed. Print every result you will report, with units.",
             json!({"type":"object","properties":{
                 "code":{"type":"string","description":"Python source to run"},
                 "name":{"type":"string","description":"Script name for work/py/<name>.py (default 'script')"},
@@ -148,6 +194,27 @@ fn resolve_standard(lib: &Library, code: &str) -> Option<String> {
     let norm = |s: &str| s.to_ascii_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
     let n = norm(code);
     lib.list().into_iter().find(|m| norm(&m.id) == n || norm(&m.code) == n || norm(&m.name) == n).map(|m| m.id)
+}
+
+/// The reply of `search_standards`. Search always returns its best candidates, so when none of
+/// them is a real match the reply says so first, names what the library holds, and shows at most
+/// two weak passages flagged as such, instead of presenting them as the answer.
+pub fn search_reply(library: &th_kb::Library, hits: &[th_kb::Hit]) -> String {
+    let relevant: Vec<th_kb::Hit> = hits.iter().filter(|h| h.is_relevant()).cloned().collect();
+    if !relevant.is_empty() {
+        return hits_text(&relevant);
+    }
+    let held = library.list().iter().map(|m| m.code.trim().to_string()).collect::<Vec<_>>().join(", ");
+    let mut s = format!(
+        "No passage in the library matches this query closely, so the library does not appear to cover it. The library holds: {held}. \
+         Do not use the passages below as the method: work from the method the task names, say that the library does not cover it, \
+         and state the source of every equation or value you use."
+    );
+    if !hits.is_empty() {
+        s.push_str("\n\nClosest passages (weak matches, possibly unrelated):\n");
+        s.push_str(&hits_text(&hits[..hits.len().min(2)]));
+    }
+    s
 }
 
 fn hits_text(hits: &[th_kb::Hit]) -> String {
@@ -345,7 +412,7 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
                 _ => ctx.project.info.standards.clone(),
             };
             let hits = ctx.library.search(q, &ids, k)?;
-            Ok(ToolOut::text(hits_text(&hits)))
+            Ok(ToolOut::text(search_reply(ctx.library, &hits)))
         }
         "get_clause" => {
             let code = need_str(a, "code")?;
@@ -371,7 +438,7 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
                 arts.extend(save_drawing(ctx, &name, dr)?);
             }
             let verdict = if d.pass { "ALL CHECKS PASS" } else { "SOME CHECKS FAIL" };
-            Ok(ToolOut { text: format!("{verdict}\n{}\nSaved calcs/{name}.json{}\n\n{}", d.summary, if d.drawing.is_some() { format!(", drawings/{name}.svg/.dxf") } else { String::new() }, clip(&d.sheet.to_markdown(), 12_000)), artifacts: arts })
+            Ok(ToolOut { text: format!("{verdict}\n{}\nSaved calcs/{name}.json{}\n\n{}", d.summary, if d.drawing.is_some() { format!(", drawings/{name}.svg/.dxf") } else { String::new() }, clip(&d.sheet.to_markdown(), 12_000)), artifacts: arts, facts: vec![sheet_facts(&name, &d.sheet, Some(&d.summary))] })
         }
         "calc_sheet" => {
             let input: calc::CalcInput = serde_json::from_value(a.clone()).map_err(|e| format!("calc_sheet arguments: {e}"))?;
@@ -379,13 +446,13 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
             let name = slug(arg_str(a, "name").unwrap_or(&input.title));
             let arts = save_sheet(ctx, &name, &sheet)?;
             let verdict = if sheet.all_pass { "all checks pass" } else { "SOME CHECKS FAIL" };
-            Ok(ToolOut { text: format!("Saved calcs/{name} ({verdict}).\n\n{}", clip(&sheet.to_markdown(), 12_000)), artifacts: arts })
+            Ok(ToolOut { text: format!("Saved calcs/{name} ({verdict}).\n\n{}", clip(&sheet.to_markdown(), 12_000)), artifacts: arts, facts: vec![sheet_facts(&name, &sheet, None)] })
         }
         "make_drawing" => {
             let d: drawing::Drawing = serde_json::from_value(a.get("drawing").cloned().unwrap_or(Value::Null)).map_err(|e| format!("drawing: {e}"))?;
             let name = slug(arg_str(a, "name").unwrap_or(&d.title));
             let arts = save_drawing(ctx, &name, &d)?;
-            Ok(ToolOut { text: format!("Saved drawings/{name}.svg, .dxf and .json ({} entities).", d.entities.len()), artifacts: arts })
+            Ok(ToolOut { text: format!("Saved drawings/{name}.svg, .dxf and .json ({} entities).", d.entities.len()), artifacts: arts, ..Default::default() })
         }
         "write_report" => {
             // append=true adds these sections to the report of the same name (long reports in parts)
@@ -417,7 +484,7 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
             let pdf = dir.join(format!("{name}.pdf"));
             let sum = report::write_pdf(&r, &pdf)?;
             save_text(&dir.join(format!("{name}.md")), &report::to_markdown(&r))?;
-            Ok(ToolOut { text: format!("Wrote reports/{name}.pdf ({} pages; sections: {}) and reports/{name}.md.", sum.pages, sum.sections.join(", ")), artifacts: vec![(ArtifactKind::Report, pdf)] })
+            Ok(ToolOut { text: format!("Wrote reports/{name}.pdf ({} pages; sections: {}) and reports/{name}.md.", sum.pages, sum.sections.join(", ")), artifacts: vec![(ArtifactKind::Report, pdf)], ..Default::default() })
         }
         "list_files" => {
             let mut s = String::new();
@@ -432,6 +499,17 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
         }
         "read_file" => {
             let p = ctx.project.resolve(need_str(a, "path")?)?;
+            if !p.exists() {
+                let near = p.parent().and_then(|d| std::fs::read_dir(d).ok()).map(|rd| {
+                    let mut v: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+                    v.sort();
+                    v
+                });
+                return Err(match near {
+                    Some(v) if !v.is_empty() => format!("{} does not exist. That folder holds: {}", ctx.project.rel(&p), v.iter().take(40).cloned().collect::<Vec<_>>().join(", ")),
+                    _ => format!("{} does not exist", ctx.project.rel(&p)),
+                });
+            }
             let max = a.get("max_chars").and_then(|m| m.as_u64()).unwrap_or(40_000).clamp(1000, 200_000) as usize;
             if is_image(&p) {
                 return Ok(ToolOut::text(describe_image(ctx.settings, &p, "")?));
@@ -443,7 +521,7 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
             let p = ctx.project.resolve(&format!("work/{}", rel.trim_start_matches("work/")))?;
             let content = a.get("content").and_then(|c| c.as_str()).unwrap_or("");
             save_text(&p, content)?;
-            Ok(ToolOut { text: format!("Wrote {} ({} bytes).", ctx.project.rel(&p), content.len()), artifacts: vec![(ArtifactKind::Work, p)] })
+            Ok(ToolOut { text: format!("Wrote {} ({} bytes).", ctx.project.rel(&p), content.len()), artifacts: vec![(ArtifactKind::Work, p)], ..Default::default() })
         }
         "read_skill" => {
             let n = need_str(a, "name")?;
@@ -520,6 +598,9 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
     let python = find_python(ctx.settings).ok_or("Python 3 was not found; install it or set its path in Settings (Python interpreter)")?;
     let work = ctx.project.folder(ArtifactKind::Work);
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    // the script runs with work/ as its working directory, so a relative project path
+    // (a project opened as `run --project some/dir`) must be made absolute first
+    let work = std::fs::canonicalize(&work).map_err(|e| format!("cannot resolve {}: {e}", work.display()))?;
     let script = if let Some(code) = a.get("code").and_then(|c| c.as_str()).filter(|c| !c.trim().is_empty()) {
         let name = slug(arg_str(a, "name").unwrap_or("script").trim_end_matches(".py"));
         let p = work.join("py").join(format!("{name}.py"));
@@ -536,8 +617,23 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
             return Err(format!("skill '{sk}' has no file '{f}'; files: {}", skill.files().join(", ")));
         }
         p
+    } else if let Some(n) = arg_str(a, "name").filter(|n| !n.trim().is_empty()) {
+        // re-run a script saved by an earlier call, e.g. with new `args`
+        let name = slug(n.trim_end_matches(".py"));
+        let p = work.join("py").join(format!("{name}.py"));
+        if !p.is_file() {
+            let saved: Vec<String> = std::fs::read_dir(work.join("py"))
+                .map(|rd| rd.flatten().filter_map(|e| e.file_name().to_str().and_then(|f| f.strip_suffix(".py")).map(str::to_string)).collect())
+                .unwrap_or_default();
+            return Err(if saved.is_empty() {
+                format!("no saved script '{name}' yet. Call run_python again with the full Python source in `code` (and name '{name}'); it is saved then")
+            } else {
+                format!("no saved script '{name}'; saved scripts: {}. To write a new one, call run_python with the full Python source in `code`", saved.join(", "))
+            });
+        }
+        p
     } else {
-        return Err("give `code`, or `skill` and `file`".into());
+        return Err("give `code`, `name` of a saved script, or `skill` and `file`".into());
     };
     let args: Vec<String> = a.get("args").and_then(|v| v.as_array()).map(|v| v.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect()).unwrap_or_default();
     let limit = a.get("timeout_s").and_then(|t| t.as_u64()).unwrap_or(120).clamp(5, 900);
@@ -605,7 +701,12 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
         let c: Vec<char> = s.chars().collect();
         if c.len() <= n { s.to_string() } else { format!("…[{} earlier characters cut]\n{}", c.len() - n, c[c.len() - n..].iter().collect::<String>()) }
     };
-    let shown = if script.starts_with(&ctx.project.dir) { ctx.project.rel(&script) } else { script.display().to_string() };
+    let pdir = std::fs::canonicalize(&ctx.project.dir).unwrap_or_else(|_| ctx.project.dir.clone());
+    let shown = match script.strip_prefix(&pdir) {
+        Ok(r) => r.display().to_string(),
+        Err(_) if script.starts_with(&ctx.project.dir) => ctx.project.rel(&script),
+        Err(_) => script.display().to_string(),
+    };
     let mut text = match status {
         Some(st) if st.success() => format!("{shown} finished in {secs:.1} s."),
         Some(st) => format!("{shown} FAILED (exit code {}) after {secs:.1} s.", st.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into())),
@@ -624,11 +725,39 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
     if status.is_some_and(|s| !s.success()) || status.is_none() {
         return Err(text);
     }
-    Ok(ToolOut { text, artifacts })
+    Ok(ToolOut { text, artifacts, ..Default::default() })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sheet_facts_carry_inputs_results_and_checks() {
+        use super::{calc, fmt4, json, sheet_facts};
+        let input: calc::CalcInput = serde_json::from_value(json!({
+            "title": "B1 flexure", "standard": "ACI 318-19",
+            "inputs": [{"symbol": "M_u", "value": 131.2, "unit": "kN*m"}, {"symbol": "phiM_n", "value": 164.87, "unit": "kN*m"}],
+            "steps": [
+                {"symbol": "U", "expr": "M_u/phiM_n", "reference": "ACI 318-19 9.5.1.1", "check": {"demand": "M_u", "capacity": "phiM_n", "label": "Flexure"}},
+                {"symbol": "over", "expr": "2*phiM_n", "unit": "kN*m", "check": {"demand": "over", "capacity": "phiM_n"}}],
+        }))
+        .unwrap();
+        let sheet = calc::run_sheet(&input).unwrap();
+        let set = sheet_facts("b1_beam", &sheet, None);
+        assert!(set.facts.iter().filter(|f| f.key).map(|f| f.name.as_str()).eq(["U", "over"]));
+        assert_eq!((set.group.as_str(), set.origin.as_str()), ("calcs/b1_beam", "calcs/b1_beam.json"));
+        assert_eq!(set.headline, "B1 flexure; ACI 318-19; SOME CHECKS FAIL");
+        let text = th_hive::facts::render(&th_hive::FactRecord { source: 1, tool: "calc_sheet".into(), set });
+        // computed figures are the ones the sheet prints; inputs keep every digit given
+        let md = sheet.to_markdown();
+        for v in [fmt4(131.2 / 164.87), fmt4(2.0 * 164.87)] {
+            assert!(md.contains(&v) && text.contains(&v), "{v}\n{text}");
+        }
+        assert!(text.contains("inputs: M_u = 131.2 kN*m; phiM_n = 164.87 kN*m"), "{text}");
+        assert!(text.contains(&format!("U = {} (ACI 318-19 9.5.1.1)", fmt4(131.2 / 164.87))), "{text}");
+        assert!(text.contains(&format!("Flexure = PASS (demand {} <= capacity {}, ratio 0.796)", fmt4(131.2), fmt4(164.87))), "{text}");
+        assert!(text.contains(&format!("over <= phiM_n = FAIL (demand {} > capacity {}, ratio 2.000)", fmt4(329.74), fmt4(164.87))), "{text}");
+    }
+
     #[test]
     fn date_is_iso() {
         let d = super::today();
@@ -653,6 +782,23 @@ mod tests {
         assert!(ok.text.contains("q = 19.62 kPa x"), "{}", ok.text);
         assert!(ok.text.contains("work/out.csv"), "{}", ok.text);
         assert!(d.join("work/py/t1.py").is_file());
+
+        // a saved script runs again by name, with new arguments
+        let again = exec_builtin(&ctx, "run_python", &json!({"name": "t1", "args": ["y"]})).unwrap();
+        assert!(again.text.contains("q = 19.62 kPa y"), "{}", again.text);
+        let missing = exec_builtin(&ctx, "run_python", &json!({"name": "nope"})).unwrap_err();
+        assert!(missing.contains("no saved script 'nope'") && missing.contains("t1"), "{missing}");
+
+        // a project opened by a relative path still finds its script (the script runs inside work/)
+        let cwd = std::env::current_dir().unwrap();
+        let rel_dir = std::path::Path::new("target").join(format!("adpy_rel_{}", std::process::id()));
+        let rel_project = Project::create(&rel_dir, crate::project::ProjectInfo::default()).unwrap();
+        assert!(rel_project.dir.is_absolute() && rel_project.dir.starts_with(&cwd), "{}", rel_project.dir.display());
+        let rel_ctx = Ctx { project: &rel_project, library: &library, skills: &[], settings: &settings, cancel: None };
+        let rel = exec_builtin(&rel_ctx, "run_python", &json!({"code": "print('rel ok')", "name": "r1"})).unwrap();
+        assert!(rel.text.contains("rel ok"), "{}", rel.text);
+        assert!(rel.text.contains("work/py/r1.py") || rel.text.contains("work\\py\\r1.py"), "{}", rel.text);
+        let _ = std::fs::remove_dir_all(&rel_dir);
 
         let bad = exec_builtin(&ctx, "run_python", &json!({"code": "raise ValueError('boom')"})).unwrap_err();
         assert!(bad.contains("FAILED") && bad.contains("boom"), "{bad}");

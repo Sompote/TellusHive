@@ -4,3 +4,7 @@
 /scratch
 /brand/log_*.txt
 /dist
+
+# research data and manuscript drafts, kept local
+/experiments
+/paper

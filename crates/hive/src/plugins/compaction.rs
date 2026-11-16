@@ -1,7 +1,8 @@
 //! Context compaction (dsh-compaction-basic): under pressure before a step, or after a
 //! context-overflow error, old tool results are pruned first; if that is not enough, the
 //! older part of the surface is summarised by the agent's own model and replaced by one
-//! `user/message` carrying the summary. The lock (`compaction/start` … `compaction/end`)
+//! `user/message` carrying the summary, followed by the values the shadowed tool results
+//! pinned (`facts`), copied exactly rather than left to the summary. The lock (`compaction/start` … `compaction/end`)
 //! and the summary are logged, so the replacement is reconstructable from the log.
 
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use crate::agent::Agent;
 use crate::agent_loop::{AgentLoop, ErrorAction};
 use crate::context::{Context, Plugin};
+use crate::facts::{self, FactRecord};
 use crate::keys;
 use crate::llm::{LlmRequest, LlmService};
 use crate::session::{EventBody, SurfaceOp};
@@ -17,6 +19,8 @@ pub struct Compaction {
     pub budget_tokens: usize,
     pub keep_recent: usize,
     pub prune_min_chars: usize,
+    /// Most characters of pinned values that follow a summary.
+    pub pin_chars: usize,
 }
 
 const SUMMARY_PROMPT: &str = "You compress the earlier part of an engineering agent's working conversation so the agent can continue without it. Write a faithful summary that keeps: the person's requests and decisions; all input data, numbers with units, design standards and clause numbers; results that tools returned (values, PASS/FAIL, utilisation ratios); files written (paths); open questions and what remains to do. Do not invent anything. Use short headed lists.";
@@ -85,9 +89,14 @@ impl Compaction {
         match llm.complete(req, &agent.cancel) {
             Ok(r) => {
                 let summary = r.message.text();
+                // the values the shadowed tool results pinned follow the summary verbatim
+                let records = s.fact_records();
+                let pinned: Vec<&FactRecord> = facts::current(&records).into_iter().filter(|r| r.source <= last).collect();
+                let block = facts::render_block(&pinned, self.pin_chars);
+                let pinned_text = if block.is_empty() { String::new() } else { format!("\n\n{block}") };
                 s.append(EventBody::CompactionSummary { summary: summary.clone(), shadowed, shadowed_tokens, provider: p.provider.name.clone(), model: p.model.clone() });
                 s.append(EventBody::UserMessage {
-                    text: format!("[Summary of the earlier conversation, made to save context]\n{summary}"),
+                    text: format!("[Summary of the earlier conversation, made to save context]\n{summary}{pinned_text}"),
                     images: vec![],
                     source: "plugin:compaction".into(),
                     surface_op: Some(SurfaceOp { start: first, end: last }),
@@ -117,7 +126,7 @@ impl Plugin for Compaction {
     }
     fn apply(&self, ctx: &Context) -> Result<(), String> {
         let lp = ctx.expect::<AgentLoop>(keys::LOOP)?;
-        let me = Arc::new(Shared(Compaction { budget_tokens: self.budget_tokens, keep_recent: self.keep_recent, prune_min_chars: self.prune_min_chars }));
+        let me = Arc::new(Shared(Compaction { budget_tokens: self.budget_tokens, keep_recent: self.keep_recent, prune_min_chars: self.prune_min_chars, pin_chars: self.pin_chars }));
         let (c1, m1) = (ctx.clone(), me.clone());
         ctx.effect(lp.pre_step.on(false, move |ps, next| {
             m1.0.run(&c1, &ps.agent, false);

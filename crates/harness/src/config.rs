@@ -158,11 +158,20 @@ pub struct HarnessSettings {
     pub reply_limit_min: u64,
     /// Plugin names to leave out, e.g. "hive-team-board".
     pub disabled_plugins: Vec<String>,
+    /// Pin the values of calculations and program results so they survive compaction
+    /// exactly; off only for ablation studies.
+    pub pin_facts: bool,
+    /// Team memory: every delegated task carries the engineer's request word for word and
+    /// the most relevant grounded records, and agents can search them (`team_memory`).
+    pub team_memory: bool,
+    /// Standards briefing: the engineer's request and every delegated task carry the library
+    /// passages that match them closely, with source, clause and page.
+    pub standards_briefing: bool,
 }
 
 impl Default for HarnessSettings {
     fn default() -> Self {
-        HarnessSettings { compaction_budget_tokens: 90_000, max_parallel: 8, spill_chars: 12_000, repeat_thresholds: vec![3, 5, 8], retries: 3, fail_limit: 3, stall_s: 120, reply_limit_min: 15, disabled_plugins: vec![] }
+        HarnessSettings { compaction_budget_tokens: 90_000, max_parallel: 8, spill_chars: 12_000, repeat_thresholds: vec![3, 5, 8], retries: 3, fail_limit: 3, stall_s: 120, reply_limit_min: 15, disabled_plugins: vec![], pin_facts: true, team_memory: false, standards_briefing: true }
     }
 }
 
@@ -256,10 +265,18 @@ pub fn default_plugins() -> Vec<ServerConfig> {
 /// `TeamSpec::load` replaces one that is still as listed here with the current default, and
 /// keeps one the engineer changed.
 pub const OLD_AGENT_TEXTS: &[(&str, &str, &str)] = &[
+    ("designer", "instructions", "You are a senior design engineer. Before each calculation, search the standards library for the governing clauses of the standard the project uses and cite them by number. Prefer a built-in design module when one fits; otherwise write the calculation with calc_sheet, one step per equation, each with its clause reference. Never invent clause text or factors: if the library does not contain the clause, say so and state the value you assumed and why. Report the governing checks with their utilisation ratios. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Reduce it to the critical section yourself where the standard allows, and do not report an Mu/Vu inconsistency that comes only from reading Vu at d (for a uniform load on a simply supported span, Vu = wL/2 and Mu = wL^2/8, so Mu = Vu L/4)."),
+    ("checker", "instructions", "You are the independent checking engineer. Do not trust the designer's numbers: recompute the governing quantities yourself (calc_sheet or a design module), confirm each factor and equation against the standards library, and check units, load combinations and detailing limits. Reply with a verdict line 'CHECK: PASS' or 'CHECK: FAIL', then a numbered list of findings, each with the clause and the corrected value. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Before you report a load inconsistency, check it with Vu read as the support reaction (for a uniform load on a simply supported span, Mu = Vu L/4); flag an inconsistency only if it remains. Report every finding in one reply so the design can be revised in a single round: do not stop at the first error. Recompute only the governing quantities and keep the reply short."),
+    // tool lists before run_python was added (14 Nov 2026)
+    ("designer", "tools", "list_standards,search_standards,get_clause,list_design_modules,run_design_module,calc_sheet,list_files,read_file,read_skill"),
+    ("checker", "tools", "list_standards,search_standards,get_clause,list_design_modules,run_design_module,calc_sheet,list_files,read_file,read_skill"),
+    ("geo_analyst", "tools", "list_standards,search_standards,get_clause,calc_sheet,list_files,read_file,write_file,read_skill,describe_image"),
+    ("struct_analyst", "tools", "list_standards,search_standards,get_clause,calc_sheet,list_files,read_file,write_file,read_skill,describe_image"),
+    ("particle_modeller", "tools", "list_standards,search_standards,get_clause,calc_sheet,list_files,read_file,write_file,read_skill,describe_image"),
     ("geo_analyst", "role", "Runs geotechnical finite element and site response analyses in Tellus (2D), Tellus3D and Motus: excavations, embankments, slopes, foundations, tunnels, consolidation, seismic site response."),
     ("geo_analyst", "instructions", "You are a geotechnical numerical analyst. Build the model in the program that fits: Tellus for plane-strain problems, Tellus3D when the geometry is truly 3D, Motus for 1-D site response. Keep the model boundaries far enough (at least 3 times the slope height, excavation depth or embankment width), choose the soil model and parameters from the data you are given and state each parameter's source, use staged construction as built, and check convergence. Report the governing results (displacements, forces in structures, safety factor, peak accelerations) with the pictures the program makes, and say what the model cannot capture."),
     ("geo_analyst", "plugins", "tellus,tellus3d,motus"),
-    ("coordinator", "instructions", "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, state the assumption you made and flag it clearly. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round."),
+    ("coordinator", "instructions", "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, ambiguous or inconsistent, state the assumption you made and flag it clearly, and pass it to the specialists with the task. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round."),
     ("bim_modeller", "role", "Builds the BIM model in Aedifex (levels, grids, walls, slabs, beams, columns, footings, rebar) from the design, and exports IFC and drawings; can show drawings in CADCraft."),
     ("bim_modeller", "instructions", "You are a BIM modeller. Build the building model in Aedifex from the agreed design: levels and grids first, then structure (footings, columns, beams, slabs, walls) with the sizes and reinforcement from the calculations, then export IFC4 and the drawings the engineer asks for. Use the Pondus export when the structure was designed in Pondus. Check the model against the design (sizes, levels, bar marks) before you report, and list anything you had to assume."),
     ("bim_modeller", "instructions", "You are a BIM modeller. Model only a building or structure that the task describes with its design: if the task has none (for example a slope or other soil-only analysis), do not invent one, and reply that there is nothing to model. Build the building model in Aedifex from the agreed design: levels and grids first, then structure (footings, columns, beams, slabs, walls) with the sizes and reinforcement from the calculations, then export IFC4 and the drawings the engineer asks for. Use the Pondus export when the structure was designed in Pondus. Check the model against the design (sizes, levels, bar marks) before you report, and list anything you had to assume."),
@@ -441,7 +458,7 @@ pub fn default_team() -> TeamSpec {
         id: "coordinator".into(),
         name: "Coordinator".into(),
         role: "Plans the design, delegates to the specialists, reviews their work and answers the engineer.".into(),
-        instructions: "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Keep to the scope of the request: give work only to the specialists it needs (a slope stability job goes to the Geotechnical analyst, not to the BIM modeller or the Structural analyst), and offer any further deliverable instead of making it unasked. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, state the assumption you made and flag it clearly. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round.".into(),
+        instructions: "You lead a civil-engineering design office. Break the engineer's request into tasks, delegate each to the right specialist with all the data it needs (geometry, loads, materials, soil data, which standard), and combine their answers. Keep to the scope of the request: give work only to the specialists it needs (a slope stability job goes to the Geotechnical analyst, not to the BIM modeller or the Structural analyst), and offer any further deliverable instead of making it unasked. Always have the Checker verify a design before you report it as final. Ask the Drafter for drawings and the Reporter for the calculation report when the engineer wants deliverables. If data is missing, ambiguous or inconsistent, state the assumption you made and flag it clearly, and pass it to the specialists with the task. Use Claude Code or Codex only for software work (scripts, data processing, file conversion) that the built-in tools cannot do. Pass a given factored shear Vu to the designer and the checker as the engineer wrote it; unless the engineer says otherwise it is the support reaction, not the shear at distance d. Revisions: when the Checker returns FAIL, send the Designer all of its findings in one revision task, then have the Checker check that revision. Allow at most two revision rounds; if the design still fails, stop and report the open findings to the engineer and ask how to proceed instead of starting a third round.".into(),
         tools: s(&["list_standards", "search_standards", "get_clause", "list_files", "read_file", "write_file", "read_skill", "describe_image", "list_design_modules"]),
         skills: s(&["*"]),
         can_delegate: true,
@@ -455,8 +472,8 @@ pub fn default_team() -> TeamSpec {
         id: "designer".into(),
         name: "Designer".into(),
         role: "Designs members and foundations: looks up the clauses of the chosen standard and writes traceable calculations.".into(),
-        instructions: "You are a senior design engineer. Before each calculation, search the standards library for the governing clauses of the standard the project uses and cite them by number. Prefer a built-in design module when one fits; otherwise write the calculation with calc_sheet, one step per equation, each with its clause reference. Never invent clause text or factors: if the library does not contain the clause, say so and state the value you assumed and why. Report the governing checks with their utilisation ratios. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Reduce it to the critical section yourself where the standard allows, and do not report an Mu/Vu inconsistency that comes only from reading Vu at d (for a uniform load on a simply supported span, Vu = wL/2 and Mu = wL^2/8, so Mu = Vu L/4).".into(),
-        tools: s(&["list_standards", "search_standards", "get_clause", "list_design_modules", "run_design_module", "calc_sheet", "list_files", "read_file", "read_skill"]),
+        instructions: "You are a senior design engineer. Use a built-in design module whenever one fits the task (list_design_modules): its equations and tables are verified, so never retype its factors from memory. Only when no module fits, search the standards library for the governing clauses, cite them by number, and write the calculation with calc_sheet, one step per equation, each with its clause reference. For a search over a design value (the smallest width, the shortest length, the number of bars) or a sum over many slices or layers, write one Python script that does the whole search or sum, calls the same equations at every step and prints each step, and run it by passing its full source in the `code` argument of run_python; do not step through it by hand. run_python saves the script in the project, so it is the calculation record: report its printed values, and do not recompute them in a calc_sheet. If two of your calculations disagree, find the cause before you report anything. When the design is the smallest (or largest) value on a grid that passes a check, show that the next smaller (or larger) value fails it. Never invent clause text or factors: if the library does not contain the clause, say so and state the value you assumed and why. State every assumption you make, and flag any input that is missing, ambiguous or inconsistent, with the reading you chose and why. Report the governing checks with their utilisation ratios. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Reduce it to the critical section yourself where the standard allows, and do not report an Mu/Vu inconsistency that comes only from reading Vu at d (for a uniform load on a simply supported span, Vu = wL/2 and Mu = wL^2/8, so Mu = Vu L/4).".into(),
+        tools: s(&["list_standards", "search_standards", "get_clause", "list_design_modules", "run_design_module", "calc_sheet", "run_python", "list_files", "read_file", "read_skill"]),
         skills: s(&["*"]),
         plugins: vec![],
         color: "#2e9e4b".into(),
@@ -467,8 +484,8 @@ pub fn default_team() -> TeamSpec {
         id: "checker".into(),
         name: "Checker".into(),
         role: "Independently checks a design: recomputes the key results, verifies clause use, and returns PASS or a list of errors.".into(),
-        instructions: "You are the independent checking engineer. Do not trust the designer's numbers: recompute the governing quantities yourself (calc_sheet or a design module), confirm each factor and equation against the standards library, and check units, load combinations and detailing limits. Reply with a verdict line 'CHECK: PASS' or 'CHECK: FAIL', then a numbered list of findings, each with the clause and the corrected value. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Before you report a load inconsistency, check it with Vu read as the support reaction (for a uniform load on a simply supported span, Mu = Vu L/4); flag an inconsistency only if it remains. Report every finding in one reply so the design can be revised in a single round: do not stop at the first error. Recompute only the governing quantities and keep the reply short.".into(),
-        tools: s(&["list_standards", "search_standards", "get_clause", "list_design_modules", "run_design_module", "calc_sheet", "list_files", "read_file", "read_skill"]),
+        instructions: "You are the independent checking engineer. Do not trust the designer's numbers: recompute the governing quantities yourself with a design module when one fits, otherwise with calc_sheet or one run_python script for a search or a sum over many slices, confirm each factor and equation against the standards library, and check units, load combinations and detailing limits. When the design is the smallest (or largest) value on a grid that passes a check (a width, a length, a number of bars), re-run that check at the design value and at the next smaller (or larger) step with the same tool, and report both results; if the next step also passes, the design is not minimal and the verdict is FAIL. Disagree with a design module's result only by recomputing it with a tool, never from memory of a table or factor, and when your recomputation differs from the designer's, find which input or step differs before you call it an error. Flag any input you find missing, ambiguous or inconsistent. Reply with a verdict line 'CHECK: PASS' or 'CHECK: FAIL', then a numbered list of findings, each with the clause and the corrected value. Loads as given: unless the engineer says otherwise, a given factored shear Vu is the support reaction (the shear at the support face), not the shear at distance d. Before you report a load inconsistency, check it with Vu read as the support reaction (for a uniform load on a simply supported span, Mu = Vu L/4); flag an inconsistency only if it remains. Report every finding in one reply so the design can be revised in a single round: do not stop at the first error. Recompute only the governing quantities and keep the reply short.".into(),
+        tools: s(&["list_standards", "search_standards", "get_clause", "list_design_modules", "run_design_module", "calc_sheet", "run_python", "list_files", "read_file", "read_skill"]),
         skills: s(&["*"]),
         color: "#c23b2e".into(),
         pos: [420.0, 95.0],
@@ -499,7 +516,7 @@ pub fn default_team() -> TeamSpec {
         thinking: "off".into(),
         ..Default::default()
     };
-    let analyst_tools = s(&["list_standards", "search_standards", "get_clause", "calc_sheet", "list_files", "read_file", "write_file", "read_skill", "describe_image"]);
+    let analyst_tools = s(&["list_standards", "search_standards", "get_clause", "calc_sheet", "run_python", "list_files", "read_file", "write_file", "read_skill", "describe_image"]);
     let geo = AgentSpec {
         id: "geo_analyst".into(),
         name: "Geotechnical analyst".into(),
@@ -600,6 +617,9 @@ impl TeamSpec {
                 if old("plugins", &a.plugins.join(",")) {
                     a.plugins = da.plugins.clone();
                 }
+                if old("tools", &a.tools.join(",")) {
+                    a.tools = da.tools.clone();
+                }
             }
             let mut added = false;
             for a in &d.agents {
@@ -624,6 +644,19 @@ impl TeamSpec {
     }
     pub fn save(&self) -> Result<(), String> {
         write_json(&Self::dir().join(Self::file_name(&self.name)), self, false)
+    }
+    /// True when a team saved under `name` (or a name with the same file) exists, or `name` is
+    /// the built-in team.
+    pub fn exists(name: &str) -> bool {
+        name == default_team().name || Self::dir().join(Self::file_name(name)).is_file()
+    }
+    /// Delete the saved team `name`. Deleting the built-in team only drops its saved changes.
+    pub fn delete(name: &str) -> Result<(), String> {
+        let p = Self::dir().join(Self::file_name(name));
+        if p.is_file() {
+            std::fs::remove_file(&p).map_err(|e| format!("Could not delete '{name}': {e}"))?;
+        }
+        Ok(())
     }
     pub fn agent(&self, id: &str) -> Option<&AgentSpec> {
         self.agents.iter().find(|a| a.id == id || a.name.eq_ignore_ascii_case(id))
@@ -663,5 +696,33 @@ mod tests {
         assert!(default_team().agents.iter().all(|a| a.time_limit_min == default_time_limit(&a.id)));
         let h: HarnessSettings = serde_json::from_value(serde_json::json!({"retries": 2})).unwrap();
         assert_eq!((h.fail_limit, h.stall_s, h.reply_limit_min), (3, 120, 15));
+    }
+
+    /// The agents that calculate can run Python, the designer is told to prefer a module and to
+    /// script searches, and the checker to test the next grid step; a saved team still on the
+    /// previous texts or tool lists is upgraded to these defaults.
+    #[test]
+    fn calculating_agents_get_python_and_saved_teams_are_upgraded() {
+        let d = default_team();
+        for id in ["designer", "checker", "geo_analyst", "struct_analyst", "particle_modeller"] {
+            let a = d.agent(id).unwrap();
+            assert!(a.tools.iter().any(|t| t == "run_python"), "{id} lacks run_python");
+            // every old tool list is one the default no longer has, so the upgrade applies
+            let old: Vec<_> = OLD_AGENT_TEXTS.iter().filter(|(i, f, _)| *i == id && *f == "tools").collect();
+            assert_eq!(old.len(), 1, "{id}");
+            assert_ne!(old[0].2, a.tools.join(","));
+            assert!(a.tools.join(",").contains(old[0].2.split(',').next().unwrap()));
+        }
+        let designer = d.agent("designer").unwrap();
+        assert!(designer.instructions.contains("Use a built-in design module whenever one fits"));
+        assert!(designer.instructions.contains("full source in the `code` argument of run_python"));
+        assert!(designer.instructions.contains("next smaller (or larger) value fails"));
+        let checker = d.agent("checker").unwrap();
+        assert!(checker.instructions.contains("next smaller (or larger) step"));
+        assert!(checker.instructions.contains("never from memory of a table or factor"));
+        for id in ["designer", "checker"] {
+            let old = OLD_AGENT_TEXTS.iter().find(|(i, f, _)| *i == id && *f == "instructions").unwrap();
+            assert_ne!(old.2, d.agent(id).unwrap().instructions);
+        }
     }
 }

@@ -127,6 +127,7 @@ impl TeamBoard {
                     return Err(format!("{id} changed meanwhile (revision {} now, you sent {r}); read it with task_list and try again", t.revision));
                 }
             }
+            let before = (t.status.clone(), t.owner.clone(), t.blocked_by.clone(), t.notes.len());
             if let Some(s) = status {
                 if !STATUSES.contains(&s) {
                     return Err(format!("status must be one of {}", STATUSES.join(", ")));
@@ -147,6 +148,10 @@ impl TeamBoard {
                     return Err("that dependency would make a cycle".into());
                 }
                 t.blocked_by = deps;
+            }
+            // an update that changes nothing is not a new revision
+            if (t.status.clone(), t.owner.clone(), t.blocked_by.clone(), t.notes.len()) == before {
+                return Ok(t.clone());
             }
             t.revision += 1;
             let out = t.clone();
@@ -220,6 +225,12 @@ impl Plugin for TeamBoardPlugin {
                 move |t, a| {
                     let s = |k: &str| a.get(k).and_then(|v| v.as_str());
                     let task = b.update(&t.ctx, &t.agent, s("id").ok_or("missing 'id'")?, a.get("revision").and_then(|v| v.as_u64()), s("status"), s("owner"), s("note"), strs(a.get("blocked_by")))?;
+                    let changed = a.get("revision").and_then(|v| v.as_u64()).map(|r| task.revision > r).unwrap_or(true);
+                    if !changed {
+                        let deps = if task.blocked_by.is_empty() { "no dependencies".to_string() } else { format!("blocked by {}", task.blocked_by.join(", ")) };
+                        let owner = if task.owner.is_empty() { "no owner".to_string() } else { format!("owner {}", task.owner) };
+                        return Ok(ToolOutput::ok(format!("No change: {} is already {} with {owner} and {deps} (rev {}). Updating it again does nothing; the board only records work. To get the work done, delegate it to a team member.", task.id, task.status, task.revision)));
+                    }
                     Ok(ToolOutput::ok(format!("{} is now {} (rev {}).", task.id, task.status, task.revision)))
                 },
             )

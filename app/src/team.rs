@@ -24,6 +24,17 @@ pub struct TeamView {
     pan: Vec2,
     pub status: String,
     new_team_name: String,
+    /// The toolbar is asking for a team name (Save as or Rename).
+    naming: Option<Naming>,
+    /// The toolbar is asking to confirm deleting the current team.
+    confirm_delete: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Naming {
+    New,
+    SaveAs,
+    Rename,
 }
 
 #[derive(Clone, PartialEq)]
@@ -43,6 +54,8 @@ impl Default for TeamView {
             pan: Vec2::new(60.0, 80.0),
             status: String::new(),
             new_team_name: String::new(),
+            naming: None,
+            confirm_delete: false,
         }
     }
 }
@@ -138,6 +151,14 @@ fn out_port(r: Rect) -> Pos2 {
 
 fn close_button(r: Rect) -> Rect {
     Rect::from_center_size(r.right_top() + Vec2::new(-14.0, 14.0), Vec2::splat(18.0))
+}
+
+/// A team with only the built-in coordinator, to be filled with Add agent.
+fn new_team(name: &str) -> TeamSpec {
+    let d = th_harness::config::default_team();
+    let mut lead = d.agents.iter().find(|a| a.id == d.coordinator).cloned().unwrap_or_default();
+    lead.pos = [60.0, 160.0];
+    TeamSpec { name: name.to_string(), description: String::new(), coordinator: d.coordinator.clone(), agents: vec![lead], links: vec![], custom_links: false }
 }
 
 fn new_agent(team: &TeamSpec, pan: Vec2) -> AgentSpec {
@@ -461,23 +482,99 @@ impl TeamView {
         }
 
         // floating toolbars, as on Tellus3D's model view
-        let bar = Rect::from_min_size(full.min + Vec2::new(16.0, 16.0), Vec2::new((full.width() - 32.0).max(200.0), 44.0));
+        let bar = Rect::from_min_size(full.min + Vec2::new(16.0, 16.0), Vec2::new((full.width() - 32.0).max(200.0), 120.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Min)));
         chrome::float_frame(child.ctx()).show(&mut child, |ui| {
-            ui.horizontal(|ui| {
+            // wraps onto a second row when the assistant panel leaves the canvas narrow
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Team").color(t.text_dim));
-                let mut pick: Option<TeamSpec> = None;
+                let mut pick: Option<String> = None;
                 egui::ComboBox::from_id_salt("team_pick").selected_text(&team.name).width(180.0).show_ui(ui, |ui| {
                     for tm in TeamSpec::list() {
-                        if ui.selectable_label(tm.name == team.name, &tm.name).clicked() {
-                            pick = Some(tm);
+                        if ui.selectable_label(tm.name == team.name, &tm.name).clicked() && tm.name != team.name {
+                            pick = Some(tm.name);
                         }
                     }
                 });
-                if let Some(p) = pick {
-                    *team = p;
+                if let Some(name) = pick {
+                    // keep edits made since the last auto-save before leaving this team
+                    let _ = team.save();
+                    *team = TeamSpec::load(&name);
                     self.selected = Some(team.coordinator.clone());
+                    self.naming = None;
+                    self.confirm_delete = false;
+                    self.status = format!("Switched to '{}'", team.name);
                     changed = true;
+                }
+                if let Some(mode) = self.naming {
+                    let r = ui.add(egui::TextEdit::singleline(&mut self.new_team_name).hint_text(if mode == Naming::Rename { "new name" } else { "new team name" }).desired_width(150.0));
+                    if self.new_team_name.is_empty() && !r.has_focus() {
+                        r.request_focus();
+                    }
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let ok = ui.button(match mode { Naming::New => "Create", Naming::SaveAs => "Save", Naming::Rename => "Rename" }).clicked() || enter;
+                    if ui.button("Cancel").clicked() {
+                        self.naming = None;
+                        self.new_team_name.clear();
+                    } else if ok {
+                        let name = self.new_team_name.trim().to_string();
+                        if name.is_empty() {
+                            self.status = "Type a team name".into();
+                        } else if name == team.name {
+                            self.naming = None;
+                        } else if TeamSpec::exists(&name) || TeamSpec::file_name(&name) == ".json" {
+                            self.status = format!("A team named '{name}' already exists (or the name has no letters): choose another");
+                        } else if mode == Naming::New {
+                            // keep the team being left, then start one with only a coordinator
+                            let _ = team.save();
+                            *team = new_team(&name);
+                            self.selected = Some(team.coordinator.clone());
+                            self.status = team.save().map(|_| format!("Created '{}': add agents with Add agent", team.name)).unwrap_or_else(|e| e);
+                            self.naming = None;
+                            self.new_team_name.clear();
+                            changed = true;
+                        } else {
+                            let old = std::mem::replace(&mut team.name, name);
+                            let saved = team.save();
+                            if mode == Naming::Rename && saved.is_ok() && old != th_harness::config::default_team().name {
+                                let _ = TeamSpec::delete(&old);
+                            }
+                            self.status = match (saved, mode) {
+                                (Err(e), _) => e,
+                                (Ok(()), Naming::SaveAs) => format!("Saved as '{}'", team.name),
+                                (Ok(()), _) => format!("Renamed '{old}' to '{}'", team.name),
+                            };
+                            self.naming = None;
+                            self.new_team_name.clear();
+                            changed = true;
+                        }
+                    }
+                } else if self.confirm_delete {
+                    ui.label(RichText::new(format!("Delete '{}'?", team.name)).color(t.text));
+                    if ui.button("Delete").clicked() {
+                        let gone = team.name.clone();
+                        self.status = match TeamSpec::delete(&gone) {
+                            Ok(()) => format!("Deleted '{gone}'"),
+                            Err(e) => e,
+                        };
+                        // move to another saved team, or the built-in one
+                        let next = TeamSpec::list().into_iter().map(|t| t.name).find(|n| *n != gone).unwrap_or_else(|| th_harness::config::default_team().name);
+                        *team = TeamSpec::load(&next);
+                        self.selected = Some(team.coordinator.clone());
+                        self.confirm_delete = false;
+                        changed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_delete = false;
+                    }
+                } else {
+                    if ui.button("Save").on_hover_text("Save this team now (changes are also saved automatically)").clicked() {
+                        self.status = team.save().map(|_| format!("Saved '{}'", team.name)).unwrap_or_else(|e| e);
+                    }
+                    if ui.button("Save as…").on_hover_text("Save a copy of this team under a new name and switch to it").clicked() {
+                        self.naming = Some(Naming::SaveAs);
+                        self.new_team_name = format!("{} copy", team.name);
+                    }
                 }
                 chrome::strip_divider(ui);
                 if chrome::icon_text_button(ui, Icon::Plus, "Add agent").clicked() {
@@ -486,16 +583,25 @@ impl TeamView {
                 }
                 chrome::strip_divider(ui);
                 ui.menu_button("More", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.new_team_name).hint_text("new team name").desired_width(150.0));
-                        if ui.button("Save as").clicked() && !self.new_team_name.trim().is_empty() {
-                            team.name = self.new_team_name.trim().to_string();
-                            self.status = team.save().map(|_| format!("Saved '{}'", team.name)).unwrap_or_else(|e| e);
-                            self.new_team_name.clear();
-                            changed = true;
-                            ui.close_menu();
-                        }
-                    });
+                    if ui.button("New team…").on_hover_text("Start an empty team with only a coordinator; the current team is kept").clicked() {
+                        self.naming = Some(Naming::New);
+                        self.new_team_name.clear();
+                        self.confirm_delete = false;
+                        ui.close_menu();
+                    }
+                    let builtin = team.name == th_harness::config::default_team().name;
+                    if ui.add_enabled(!builtin, egui::Button::new("Rename team…")).on_hover_text("Give this team a new name").on_disabled_hover_text("The built-in Design office keeps its name: use Save as for a copy").clicked() {
+                        self.naming = Some(Naming::Rename);
+                        self.new_team_name = team.name.clone();
+                        self.confirm_delete = false;
+                        ui.close_menu();
+                    }
+                    if ui.add_enabled(!builtin, egui::Button::new("Delete team…")).on_hover_text("Delete this saved team").on_disabled_hover_text("The built-in Design office cannot be deleted: use Reset to undo changes").clicked() {
+                        self.confirm_delete = true;
+                        self.naming = None;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Reset to the default design office").clicked() {
                         *team = th_harness::config::default_team();
                         changed = true;

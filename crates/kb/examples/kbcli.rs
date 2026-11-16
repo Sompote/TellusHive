@@ -83,7 +83,8 @@ fn run() -> Result<(), String> {
 
 fn print_hit(h: &th_kb::Hit) {
     let page = h.page.map(|p| format!(" p.{p}")).unwrap_or_default();
-    println!("== {:.3}  {} {}  {}{}", h.score, h.standard_code, h.clause, h.title, page);
+    let sim = h.similarity.map(|v| format!("{v:.3}")).unwrap_or_else(|| "-".into());
+    println!("== {:.3}  {} {}  {}{}  [sim {sim} cov {:.2}{}{}]", h.score, h.standard_code, h.clause, h.title, page, h.coverage, if h.clause_match { " clause" } else { "" }, if h.is_relevant() { " RELEVANT" } else { " weak" });
     let t: String = h.text.chars().take(400).collect();
     println!("{t}\n");
 }

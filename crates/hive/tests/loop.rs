@@ -66,6 +66,17 @@ fn boot(cfg: BaseConfig, script: Box<Script>) -> (Hive, Arc<Scripted>) {
         let tools = ctx.expect::<ToolRegistry>(keys::TOOLS)?;
         tools.register(ctx, ToolDef::new("add", "adds", json!({"type":"object"}), |_, a| Ok(ToolOutput::ok(format!("{}", a["a"].as_i64().unwrap_or(0) + a["b"].as_i64().unwrap_or(0))))))?;
         tools.register(ctx, ToolDef::new("big", "long output", json!({"type":"object"}), |_, _| Ok(ToolOutput::ok("x".repeat(5000)))))?;
+        // a calculation: a long printed sheet, with its values pinned to the result
+        tools.register(ctx, ToolDef::new("sheet", "runs a sheet", json!({"type":"object"}), |_, a| {
+            let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+            let set = FactSet {
+                group: format!("calcs/{}", s("name")),
+                origin: format!("calcs/{}.json", s("name")),
+                headline: "all checks pass".into(),
+                facts: vec![Fact::new("input", "b", "300", "mm"), Fact::new("result", &s("symbol"), &s("value"), &s("unit")).note("ACI 318-19 22.2"), Fact::new("check", "Capacity", "PASS", "").note(format!("ratio {}", s("ratio")))],
+            };
+            Ok(ToolOutput { text: format!("sheet {} {}", s("name"), "row ".repeat(250)), facts: vec![set], ..Default::default() })
+        }))?;
         let subs = ctx.expect::<Subagents>(keys::SUBAGENTS)?;
         tools.register(ctx, ToolDef::new("broken", "always fails", json!({"type":"object"}), |_, _| Err("give `code`".into())))?;
         let slow = AgentPreset { time_limit: Some(Duration::from_millis(250)), ..preset("slowpoke") };
@@ -183,7 +194,10 @@ fn repeat_reminder_and_spill_and_prune() {
     let evs = a.session.events();
     let r: Vec<&String> = evs.iter().filter_map(|e| if let EventBody::ToolResult { text, .. } = &e.body { Some(text) } else { None }).collect();
     assert!(r[0].contains("5000 characters in all") && r[0].len() < 1000);
-    assert!(std::fs::read_to_string(dir.join("big_c0.txt")).unwrap().len() == 5000);
+    // short handles the model can copy: big_1.txt, big_2.txt, ...
+    assert!(r[0].contains("spill/big_1.txt"), "{}", r[0]);
+    assert!(std::fs::read_to_string(dir.join("big_1.txt")).unwrap().len() == 5000);
+    assert!(dir.join("big_3.txt").exists());
     assert!(evs.iter().any(|e| matches!(&e.body, EventBody::UserMessage { source, text, .. } if source == "plugin:repeat-tool-reminder" && text.contains("3 times"))));
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -206,6 +220,113 @@ fn compaction_summarises_old_surface() {
     let last = ad.seen.lock().unwrap().iter().rev().find(|r| r.purpose == "agent").unwrap().clone();
     assert!(last.messages[0].text().contains("SUMMARY: earlier work"), "{:?}", last.messages[0].text());
     assert!(last.messages.len() <= 4);
+}
+
+/// The summary a model writes may drop or misquote numbers; the values the tools pinned
+/// must reach the next request exactly, and a sheet that was run again must show only its
+/// latest values.
+#[test]
+fn compaction_keeps_pinned_values_exactly() {
+    let cfg = BaseConfig { compaction_budget_tokens: 300, compaction_keep_recent: 2, spill_chars: 0, ..Default::default() };
+    let (h, ad) = boot(cfg, Box::new(|req, n| {
+        if req.purpose == "compaction" {
+            // a summary that keeps no number at all
+            return Ok(text("SUMMARY: the beam and the footing were designed"));
+        }
+        let last = req.messages.last().unwrap();
+        if last.role == "user" && last.text().starts_with("run ") {
+            let args: serde_json::Value = serde_json::from_str(last.text().trim_start_matches("run ")).unwrap();
+            return Ok(calls(&[(&format!("c{n}"), "sheet", args)]));
+        }
+        Ok(text(&"answer ".repeat(80)))
+    }));
+    let a = new_agent(&h, "t5b");
+    let runs = [
+        json!({"name": "B1", "symbol": "M_u", "value": "120.5", "unit": "kN*m", "ratio": "0.731"}),
+        json!({"name": "F1", "symbol": "q_ult", "value": "688.25", "unit": "kPa", "ratio": "0.4127"}),
+        json!({"name": "B1", "symbol": "M_u", "value": "131.2", "unit": "kN*m", "ratio": "0.796"}),
+    ];
+    for r in &runs {
+        h.send(&a, user(&format!("run {r}"))).unwrap();
+    }
+    for k in 0..3 {
+        h.send(&a, user(&format!("question {k} {}", "words ".repeat(60)))).unwrap();
+    }
+    // every set is in the log with the result it came from
+    let evs = a.session.events();
+    let records = a.session.fact_records();
+    assert_eq!(records.len(), 3);
+    for r in &records {
+        assert!(evs.iter().any(|e| e.seq == r.source && matches!(&e.body, EventBody::ToolResult { name, .. } if name == "sheet")), "source {}", r.source);
+    }
+    assert!(evs.iter().any(|e| matches!(e.body, EventBody::CompactionSummary { .. })));
+    // the sheets themselves are gone from the request; their values are not
+    let last = ad.seen.lock().unwrap().iter().rev().find(|r| r.purpose == "agent").unwrap().clone();
+    assert!(!last.messages.iter().any(|m| m.role == "tool"), "the tool results should be summarised away");
+    let head = last.messages[0].text();
+    assert!(head.contains("SUMMARY: the beam and the footing were designed"), "{head}");
+    for exact in ["b = 300 mm", "M_u = 131.2 kN*m (ACI 318-19 22.2)", "Capacity = PASS (ratio 0.796)", "q_ult = 688.25 kPa (ACI 318-19 22.2)", "Capacity = PASS (ratio 0.4127)", "calcs/B1.json [sheet]: all checks pass", "calcs/F1.json [sheet]"] {
+        assert!(head.contains(exact), "missing `{exact}` in:\n{head}");
+    }
+    // the first run of B1 was replaced by the second
+    assert!(!head.contains("120.5") && !head.contains("0.731"), "{head}");
+    assert_eq!(head.matches("calcs/B1.json").count(), 1, "{head}");
+}
+
+/// A worker's pinned values reach the parent with its answer, and the parent's final answer
+/// is audited against them: a misquoted value is sent back once, then corrected.
+#[test]
+fn delegated_facts_are_promoted_and_the_answer_is_audited() {
+    let (h, ad) = boot(BaseConfig { spill_chars: 0, ..Default::default() }, Box::new(|req, _| {
+        if req.messages[0].text().starts_with("Task from LEAD") {
+            if req.messages.iter().any(|m| m.role == "tool") {
+                return Ok(text("B1 done: M_u = 131.2 kN*m"));
+            }
+            return Ok(calls(&[("w1", "sheet", json!({"name": "B1", "symbol": "M_u", "value": "131.2", "unit": "kN*m", "ratio": "0.796"}))]));
+        }
+        let last = req.messages.last().unwrap();
+        if last.role == "user" && last.text().starts_with("Fact check:") {
+            assert!(last.text().contains("133.9"), "{}", last.text());
+            return Ok(text("Corrected: M_u = 131.2 kN*m, ratio 0.796."));
+        }
+        if req.messages.iter().any(|m| m.role == "tool") {
+            return Ok(text("The design moment is M_u = 133.9 kN*m."));
+        }
+        Ok(calls(&[("d1", "delegate", json!({"agent": "worker", "task": "run sheet B1"}))]))
+    }));
+    let a = new_agent(&h, "t5c");
+    let out = h.send(&a, user("design B1")).unwrap();
+    assert_eq!(out.text, "Corrected: M_u = 131.2 kN*m, ratio 0.796.");
+    let recs = a.session.fact_records();
+    assert_eq!(recs.len(), 1, "the worker's sheet is pinned in the lead's session");
+    assert_eq!(recs[0].tool, "delegate");
+    assert!(recs[0].set.facts.iter().any(|f| f.name == "M_u" && f.value == "131.2"));
+    let audits: Vec<serde_json::Value> = a.session.events().into_iter().filter_map(|e| match e.body { EventBody::Custom { kind, data } if kind == "facts/audit" => Some(data), _ => None }).collect();
+    assert_eq!(audits.len(), 2, "{audits:?}");
+    assert_eq!(audits[0]["unverified"], json!(["133.9"]));
+    assert_eq!(audits[0]["nudged"], json!(true));
+    assert_eq!(audits[1]["unverified"], json!([]));
+    assert!(ad.calls.load(Ordering::SeqCst) >= 4);
+}
+
+/// An update that changes nothing keeps the revision and says so, and calls that differ only
+/// by their revision count as repeats.
+#[test]
+fn no_op_board_updates_are_reported_and_count_as_repeats() {
+    let (h, _) = boot(BaseConfig::default(), Box::new(|req, _| {
+        let n = req.messages.iter().filter(|m| m.role == "tool").count();
+        match n {
+            0 => Ok(calls(&[("t1", "task_create", json!({"title": "Check C1"}))])),
+            1..=3 => Ok(calls(&[(&format!("u{n}"), "task_update", json!({"id": "task-1", "revision": n, "status": "pending"}))])),
+            _ => Ok(text("stopped")),
+        }
+    }));
+    let a = new_agent(&h, "t7");
+    h.send(&a, user("plan")).unwrap();
+    let evs = a.session.events();
+    let results: Vec<String> = evs.iter().filter_map(|e| if let EventBody::ToolResult { name, text, .. } = &e.body { (name == "task_update").then(|| text.clone()) } else { None }).collect();
+    assert!(results[0].starts_with("No change: task-1 is already pending") && results[0].contains("(rev 1)"), "{}", results[0]);
+    assert!(evs.iter().any(|e| matches!(&e.body, EventBody::UserMessage { source, text, .. } if source == "plugin:repeat-tool-reminder" && text.contains("task_update 3 times"))));
 }
 
 #[test]

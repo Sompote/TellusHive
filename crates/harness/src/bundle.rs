@@ -44,6 +44,7 @@ pub fn profile(domain: &Arc<Domain>, h: &HarnessSettings) -> Vec<Arc<dyn Plugin>
         spill_chars: h.spill_chars,
         spill_locator: Some(Arc::new(move |_| Some((d.project().dir.join("sessions/spill"), "sessions/spill".into())))),
         disabled: h.disabled_plugins.clone(),
+        pin_facts: h.pin_facts,
         ..Default::default()
     };
     let mut p = base_bundle(&cfg);
@@ -112,7 +113,7 @@ impl Plugin for BuiltinTools {
                 let (settings, project, skills) = (d.settings(), d.project(), d.skills());
                 let c = tools::Ctx { project: &project, library: &d.library, skills: &skills, settings: &settings, cancel: Some(&t.agent.cancel) };
                 let out = tools::exec_builtin(&c, &name, &args)?;
-                Ok(ToolOutput { text: out.text, meta: artifacts_meta(&out.artifacts), ..Default::default() })
+                Ok(ToolOutput { text: out.text, meta: artifacts_meta(&out.artifacts), facts: out.facts, ..Default::default() })
             });
             if READ_ONLY.contains(&spec.name.as_str()) {
                 def = def.concurrent();
@@ -285,9 +286,17 @@ impl SubagentProvider for Member {
         self.role.clone()
     }
     fn run(&self, ctx: &Context, parent: &Arc<Agent>, task: &str) -> Result<String, String> {
+        self.run_facts(ctx, parent, task).map(|(t, _)| t)
+    }
+    fn run_facts(&self, ctx: &Context, parent: &Arc<Agent>, task: &str) -> Result<(String, Vec<th_hive::FactSet>), String> {
         let spec = self.d.team().agent(&self.id).cloned().ok_or_else(|| format!("no agent '{}' in the team", self.id))?;
         let preset = self.d.preset(&spec)?;
-        ChildAgent { preset }.run(ctx, parent, task)
+        let settings = self.d.settings();
+        // the library is searched with the task's own words, before team memory adds its records
+        let standards = if settings.harness.standards_briefing { crate::standards_briefing::briefing(&self.d.library, task, &self.d.project().info.standards) } else { String::new() };
+        let task = if settings.harness.team_memory { format!("{task}{}", crate::team_memory::briefing(ctx, parent, task, &settings.embedder)) } else { task.to_string() };
+        let task = format!("{task}{standards}");
+        ChildAgent { preset }.run_facts(ctx, parent, &task)
     }
 }
 
@@ -355,6 +364,8 @@ impl Plugin for Team {
             team.reachable(&spec.id).into_iter().map(|r| Arc::new(Member { d: d1.clone(), id: r.id.clone(), name: r.name.clone(), role: r.role.clone() }) as Arc<dyn SubagentProvider>).collect()
         });
         let reg = ctx.expect::<ToolRegistry>(keys::TOOLS)?;
+        let (d2, d3) = (d.clone(), d.clone());
+        reg.register(ctx, crate::team_memory::tool(move || d2.settings().embedder.clone(), move || d3.settings().harness.team_memory))?;
         reg.register(ctx, external_tool(&d, Which::ClaudeCode))?;
         reg.register(ctx, external_tool(&d, Which::Codex))?;
         Ok(())

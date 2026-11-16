@@ -110,7 +110,9 @@ impl Project {
         for k in ArtifactKind::all() {
             std::fs::create_dir_all(dir.join(k.folder())).map_err(|e| e.to_string())?;
         }
-        let p = Project { dir: dir.to_path_buf(), info };
+        // an absolute folder, so tools that run programs in a subfolder (run_python, Claude Code,
+        // Codex) still find the project when it was opened by a relative path
+        let p = Project { dir: std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf()), info };
         p.save()?;
         Ok(p)
     }
@@ -120,7 +122,7 @@ impl Project {
         for k in ArtifactKind::all() {
             let _ = std::fs::create_dir_all(dir.join(k.folder()));
         }
-        Ok(Project { dir: dir.to_path_buf(), info })
+        Ok(Project { dir: std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf()), info })
     }
 
     /// Opens the folder as a project, creating it if needed.

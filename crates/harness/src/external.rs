@@ -101,6 +101,32 @@ pub fn run(which: Which, cfg: &ExternalAgent, prompt: &str, workdir: &Path, proj
     run_job(which, cfg, &Job { prompt, workdir, project, mcp, model: "", mcp_only: true }, cancel)
 }
 
+/// The environment of the tool server the coding agent starts. Claude Code starts MCP servers
+/// with a basic environment only, so without this the server falls back to the user's own data
+/// folder, settings and team (an experiment's delegated agents then ran on the user's default
+/// model). Folders are passed as values. API keys are passed as `${NAME}` references, which
+/// Claude Code expands from its own environment, so no key is written to the config file;
+/// `with_keys` is false for Codex, which has no such expansion.
+fn mcp_env(with_keys: bool) -> serde_json::Value {
+    let mut env = serde_json::Map::new();
+    for k in ["TELLUSHIVE_HOME", "XDG_DATA_HOME"] {
+        if let Ok(v) = std::env::var(k) {
+            // absolute: the server starts in the work folder, where a relative path points nowhere
+            let v = std::path::absolute(&v).map(|p| p.display().to_string()).unwrap_or(v);
+            env.insert(k.into(), json!(v));
+        }
+    }
+    if with_keys {
+        for (k, v) in std::env::vars() {
+            let key_like = k.ends_with("_API_KEY") || k.starts_with("TH_KB_");
+            if key_like && !v.is_empty() && k != "ANTHROPIC_API_KEY" && k != "OPENAI_API_KEY" {
+                env.insert(k.clone(), json!(format!("${{{k}}}")));
+            }
+        }
+    }
+    serde_json::Value::Object(env)
+}
+
 /// Runs a job. The prompt goes in on stdin, so long conversations are not limited by the
 /// size of a command line.
 pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool) -> Result<RunOutput, String> {
@@ -132,7 +158,7 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
             }
             if let Some(m) = &job.mcp {
                 let cfg_path = workdir.join(format!(".tellushive_mcp_{}.json", m.name));
-                let v = json!({"mcpServers": {m.name.clone(): {"command": m.command, "args": m.args}}});
+                let v = json!({"mcpServers": {m.name.clone(): {"command": m.command, "args": m.args, "env": mcp_env(true)}}});
                 std::fs::write(&cfg_path, v.to_string()).map_err(|e| e.to_string())?;
                 cmd.arg("--mcp-config").arg(&cfg_path);
                 if job.mcp_only {
@@ -149,6 +175,9 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
             if let Some(m) = &job.mcp {
                 cmd.arg("-c").arg(format!("mcp_servers.{}.command={}", m.name, json!(m.command.display().to_string())));
                 cmd.arg("-c").arg(format!("mcp_servers.{}.args={}", m.name, json!(m.args)));
+                for (k, v) in mcp_env(false).as_object().into_iter().flatten() {
+                    cmd.arg("-c").arg(format!("mcp_servers.{}.env.{k}={v}", m.name));
+                }
                 // our tools run under the harness's own pipeline; codex exec cannot ask anyone
                 cmd.arg("-c").arg(format!("mcp_servers.{}.default_tools_approval_mode=\"approve\"", m.name));
             }

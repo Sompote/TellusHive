@@ -67,7 +67,12 @@ impl Plugin for RepeatToolReminder {
             }
             if !ex.contains(&p.tool) {
                 // serde_json maps are ordered by key, so property order does not matter
-                let key = format!("{}|{}", p.tool, p.args);
+                // a revision counter is bookkeeping, not a different request
+                let mut args = p.args.clone();
+                if let Some(o) = args.as_object_mut() {
+                    o.remove("revision");
+                }
+                let key = format!("{}|{}", p.tool, args);
                 let n = p.agent.with_state::<Repeat, _>("repeat-tool", |r| {
                     if r.key == key {
                         r.count += 1;
@@ -167,6 +172,25 @@ impl Plugin for ContinuationGuard {
 pub struct Spill {
     pub chars: usize,
     pub locate: Option<SpillLocator>,
+    /// Tools whose outputs are never spilled.
+    pub exclude: Vec<String>,
+}
+
+/// Creates `<dir>/<tool>_<n>.txt` with the first free `n`, so the handle the model has to
+/// copy stays short (a long random id is easy to mistype).
+fn spill_file(dir: &std::path::Path, tool: &str, text: &str) -> Option<String> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).ok()?;
+    let tool: String = tool.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    for n in 1..100_000 {
+        let name = format!("{tool}_{n}.txt");
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(&name)) {
+            Ok(mut f) => return f.write_all(text.as_bytes()).ok().map(|_| name),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 impl Plugin for Spill {
@@ -174,7 +198,7 @@ impl Plugin for Spill {
         "hive-spill".into()
     }
     fn describe(&self) -> String {
-        format!("outputs over {} characters go to a file", self.chars)
+        format!("outputs over {} characters go to a file (not {})", self.chars, self.exclude.join(", "))
     }
     fn inject(&self) -> Vec<&'static str> {
         vec![keys::TOOLS]
@@ -183,13 +207,13 @@ impl Plugin for Spill {
         let (Some(locate), true) = (self.locate.clone(), self.chars > 0) else { return Ok(()) };
         let tools = ctx.expect::<ToolRegistry>(keys::TOOLS)?;
         let limit = self.chars;
+        let exclude = self.exclude.clone();
         ctx.effect(tools.post_execute.on(false, move |p, next| {
             let n = p.output.text.chars().count();
-            if n > limit {
+            if n > limit && !exclude.contains(&p.tool) {
                 if let Some((dir, shown)) = locate(&p.agent) {
-                    let name = format!("{}_{}.txt", p.tool, p.call_id.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>());
-                    let path: PathBuf = dir.join(&name);
-                    if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &p.output.text).is_ok() {
+                    let dir: PathBuf = dir;
+                    if let Some(name) = spill_file(&dir, &p.tool, &p.output.text) {
                         let head = crate::clip(&p.output.text, limit * 2 / 5);
                         p.output.text = format!("{head}\n…[{n} characters in all; the full output is saved as {shown}/{name}. Read it with read_file when you need the rest]");
                     }

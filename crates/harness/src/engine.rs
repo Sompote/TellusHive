@@ -242,6 +242,7 @@ impl Domain {
         let settings = self.settings();
         let project = self.project();
         let c = self.plugins.ensure_for(&settings, server, Some(&project.dir))?;
+        let args_shown = args.clone();
         let r = match c.call_until(tool, args, cancel) {
             Ok(r) => r,
             Err(e) => {
@@ -251,6 +252,7 @@ impl Domain {
                 return Err(e);
             }
         };
+        let facts: Vec<th_hive::FactSet> = if r.is_error { vec![] } else { crate::pins::plugin_facts(server, tool, &args_shown, &r.text).into_iter().collect() };
         let mut meta = json!({});
         if !r.is_error {
             if let Some(m) = Plugins::keep_model(&c, server, tool, &project.dir) {
@@ -279,7 +281,7 @@ impl Domain {
         if r.is_error {
             Err(text)
         } else {
-            Ok(ToolOutput { text, meta, ..Default::default() })
+            Ok(ToolOutput { text, meta, facts, ..Default::default() })
         }
     }
 }
@@ -413,7 +415,12 @@ impl Engine {
             *u = Some(tx.clone());
         }
         let agent = agents.create(preset, session, None, cancel.clone());
+        let briefing = if self.domain.settings().harness.standards_briefing { crate::standards_briefing::briefing(&self.domain.library, &input.text, &project.info.standards) } else { String::new() };
         agent.followup(msg);
+        // a separate message, so team memory's record of the request keeps only the engineer's words
+        if !briefing.is_empty() {
+            agent.followup(Inbound { text: briefing.trim_start().to_string(), images: vec![], source: "plugin:standards-briefing".into() });
+        }
         let r = lp.run_turn(&self.hive.ctx, &agent);
         agents.remove(&agent.id);
         if let Ok(mut u) = self.domain.ui.lock() {

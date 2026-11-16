@@ -18,10 +18,10 @@
 //! hashed embedder, `idf.bin`. BM25 is rebuilt when a standard is loaded.
 
 mod chunk;
-mod embed;
+pub mod embed;
 mod extract;
 mod store;
-mod text;
+pub mod text;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -62,7 +62,9 @@ pub struct NewStandard {
 
 /// One search result. `score` is the fused score: the reciprocal-rank-fusion
 /// value (at most about 0.033 per ranking) plus a clause-number boost (1.0 for
-/// an exact match of a clause the query names).
+/// an exact match of a clause the query names). Because the fused score ranks
+/// rather than measures, the best hit scores about the same however poor the
+/// match, so `similarity`, `coverage` and `clause_match` say how good it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hit {
     pub standard_id: String,
@@ -72,6 +74,42 @@ pub struct Hit {
     pub page: Option<u32>,
     pub text: String,
     pub score: f32,
+    /// Cosine similarity of the query and chunk embeddings (absent without a vector ranking).
+    #[serde(default)]
+    pub similarity: Option<f32>,
+    /// Share of the query's distinct terms that occur in the chunk's text or title.
+    #[serde(default)]
+    pub coverage: f32,
+    /// The query named this chunk's clause, table or figure.
+    #[serde(default)]
+    pub clause_match: bool,
+}
+
+/// Similarity at or above which an API-embedded chunk counts as relevant on meaning alone.
+/// Calibrated with bge-m3 on the TellusHive library (14 November 2026): passages that answer
+/// the query scored 0.55 to 0.73, and the best passages for queries the library cannot answer
+/// (traffic capacity, wastewater, a table it does not hold) scored 0.40 to 0.56.
+pub const RELEVANT_SIMILARITY: f32 = 0.58;
+/// A lower similarity that still counts when the chunk also holds most of the query's terms.
+pub const SUPPORTED_SIMILARITY: f32 = 0.50;
+/// Share of the query's distinct terms needed with `SUPPORTED_SIMILARITY`.
+pub const RELEVANT_COVERAGE: f32 = 0.75;
+/// Share of terms that counts on words alone, for standards without API embeddings.
+pub const WORDS_ONLY_COVERAGE: f32 = 0.8;
+
+impl Hit {
+    /// Whether this hit is a real match rather than the best of poor candidates: the query
+    /// named its clause, its meaning is close, or its meaning is fairly close and it holds
+    /// most of the query's terms.
+    pub fn is_relevant(&self) -> bool {
+        if self.clause_match {
+            return true;
+        }
+        match self.similarity {
+            Some(s) => s >= RELEVANT_SIMILARITY || (s >= SUPPORTED_SIMILARITY && self.coverage >= RELEVANT_COVERAGE),
+            None => self.coverage >= WORDS_ONLY_COVERAGE,
+        }
+    }
 }
 
 /// How a standard's chunks are embedded.
@@ -514,6 +552,10 @@ impl Library {
         }
         // fused score per (standard index, chunk index)
         let mut fused: HashMap<(usize, usize), f32> = HashMap::new();
+        // cosine similarity per chunk (API embeddings only, whose scale is comparable) and the
+        // chunks whose clause the query names: how good a hit is, beside where it ranks
+        let mut sims: HashMap<(usize, usize), f32> = HashMap::new();
+        let mut named: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
         let add_list = |list: Vec<(usize, usize, f32)>, fused: &mut HashMap<(usize, usize), f32>| {
             for (rank, (s, c, _)) in list.into_iter().enumerate() {
                 *fused.entry((s, c)).or_insert(0.0) += 1.0 / (RRF_K + rank as f32 + 1.0);
@@ -592,8 +634,12 @@ impl Library {
                         continue;
                     }
                     let dim = s.emb.dim;
+                    let api = matches!(s.emb.config, EmbedderConfig::Api { .. });
                     for (ci, v) in s.vectors.chunks_exact(dim).enumerate() {
                         let dot: f32 = v.iter().zip(&q).map(|(a, b)| a * b).sum();
+                        if api {
+                            sims.insert((si, ci), dot);
+                        }
                         list.push((si, ci, dot));
                     }
                 }
@@ -641,8 +687,34 @@ impl Library {
                                 b += 0.05;
                             }
                             *fused.entry((si, ci)).or_insert(0.0) += b;
+                            if best >= 0.6 {
+                                named.insert((si, ci));
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        // --- title boost: a distinctive query term (a method's name such as "Schmertmann")
+        // in a chunk's heading lifts that chunk above passages that merely mention it
+        let qterms: Vec<String> = {
+            let mut t = text::terms(query);
+            t.sort();
+            t.dedup();
+            t
+        };
+        if mode == SearchMode::Hybrid {
+            let distinctive: Vec<&String> = qterms.iter().filter(|t| t.chars().count() >= 5).collect();
+            if !distinctive.is_empty() {
+                for (key, v) in fused.iter_mut() {
+                    let c = &stds[key.0].chunks[key.1];
+                    if c.title.is_empty() {
+                        continue;
+                    }
+                    let tt = text::terms(&c.title);
+                    let n = distinctive.iter().filter(|t| tt.contains(t)).count();
+                    *v += 0.01 * n.min(2) as f32;
                 }
             }
         }
@@ -650,7 +722,20 @@ impl Library {
         let mut all: Vec<(usize, usize, f32)> = fused.into_iter().map(|((s, c), v)| (s, c, v)).collect();
         sort_desc(&mut all);
         all.truncate(k);
-        Ok(all.into_iter().map(|(si, ci, sc)| hit(&stds[si], &stds[si].chunks[ci], sc)).collect())
+        Ok(all
+            .into_iter()
+            .map(|(si, ci, sc)| {
+                let c = &stds[si].chunks[ci];
+                let mut h = hit(&stds[si], c, sc);
+                h.similarity = sims.get(&(si, ci)).copied();
+                h.clause_match = named.contains(&(si, ci));
+                if !qterms.is_empty() {
+                    let ct = text::terms(&format!("{} {}", c.title, c.text));
+                    h.coverage = qterms.iter().filter(|t| ct.contains(t)).count() as f32 / qterms.len() as f32;
+                }
+                h
+            })
+            .collect())
     }
 
     /// Exact clause lookup plus its sub-clauses (and tables/figures numbered
@@ -704,6 +789,9 @@ fn hit(s: &Loaded, c: &Chunk, score: f32) -> Hit {
         page: c.page,
         text: c.text.clone(),
         score,
+        similarity: None,
+        coverage: 0.0,
+        clause_match: false,
     }
 }
 
@@ -722,6 +810,9 @@ fn query_clause_refs(q: &str) -> Vec<(String, String)> {
         .unwrap()
     });
     let mut out = Vec::new();
+    // a sentence-length query holds numbers that are data, not clause references ("1.4 1.7 load
+    // factors", "FS 2.5"), so a bare two-level number counts only in a short query
+    let words = q.split_whitespace().count();
     for c in rx.captures_iter(q) {
         let word = c.get(1).map(|m| m.as_str().to_lowercase());
         let thai = c.get(2).is_some();
@@ -730,6 +821,9 @@ fn query_clause_refs(q: &str) -> Vec<(String, String)> {
         let lettered_alone = num.len() == 1 && num.chars().all(|ch| ch.is_ascii_uppercase());
         // bare single integers and single letters only count after a keyword ("Section 6", "Annex D")
         if !multi && word.is_none() && !thai {
+            continue;
+        }
+        if word.is_none() && !thai && num.split('.').count() < 3 && words > 4 {
             continue;
         }
         if lettered_alone && !matches!(word.as_deref(), Some("annex") | Some("appendix")) {
@@ -762,6 +856,13 @@ mod tests {
         assert!(r.contains(&("annex".into(), "d".into())));
         assert!(r.contains(&("".into(), "6.5.2.2(1)p".into())));
         assert!(query_clause_refs("minimum shear reinforcement area").is_empty());
+        // numbers in a sentence-length query are data, not clause references
+        assert!(query_clause_refs("1.4 1.7 load factors dead live load combination").is_empty());
+        assert!(query_clause_refs("strip footing FS 2.5 net allowable bearing capacity").is_empty());
+        // but a short query, a three-level number or a keyword still names a clause
+        assert_eq!(query_clause_refs("EC7 6.5"), vec![("".to_string(), "6.5".to_string())]);
+        assert_eq!(query_clause_refs("the design rules of clause 6.5 for bearing resistance"), vec![("".to_string(), "6.5".to_string())]);
+        assert_eq!(query_clause_refs("partial factors in 2.4.7.3 for the persistent situation"), vec![("".to_string(), "2.4.7.3".to_string())]);
         assert_eq!(query_clause_refs("ข้อ 3.2"), vec![("".to_string(), "3.2".to_string())]);
     }
     /// Re-indexing keeps the chunks and notes and changes how they are embedded; the

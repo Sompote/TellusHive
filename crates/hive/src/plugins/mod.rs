@@ -2,6 +2,7 @@
 //! starts from. An application adds its own plugins after these and may switch any of
 //! them off by name (`BaseConfig::disabled`), the way a dsh profile patch removes a row.
 
+pub mod audit;
 pub mod compaction;
 pub mod core;
 pub mod guards;
@@ -43,6 +44,11 @@ pub struct BaseConfig {
     pub max_depth: usize,
     /// Plugin names left out of the tree.
     pub disabled: Vec<String>,
+    /// Log the facts tools pin to their results and audit final answers against them
+    /// (off only for ablation studies).
+    pub pin_facts: bool,
+    /// Tools whose outputs are never spilled to a file (reading a file back must not spill).
+    pub spill_exclude: Vec<String>,
 }
 
 impl Default for BaseConfig {
@@ -59,6 +65,8 @@ impl Default for BaseConfig {
             spill_locator: None,
             max_depth: 3,
             disabled: vec![],
+            pin_facts: true,
+            spill_exclude: vec!["read_file".into()],
         }
     }
 }
@@ -66,16 +74,20 @@ impl Default for BaseConfig {
 /// The base plugins, in mount order.
 pub fn base_bundle(cfg: &BaseConfig) -> Vec<Arc<dyn Plugin>> {
     let all: Vec<Arc<dyn Plugin>> = vec![
-        Arc::new(core::Core { sessions_dir: cfg.sessions_dir.clone(), max_parallel: cfg.max_parallel, max_result_chars: cfg.max_result_chars }),
+        Arc::new(core::Core { sessions_dir: cfg.sessions_dir.clone(), max_parallel: cfg.max_parallel, max_result_chars: cfg.max_result_chars, pin_facts: cfg.pin_facts }),
         Arc::new(llm::OpenAiAdapter),
         Arc::new(llm::Retry { attempts: cfg.retries }),
-        Arc::new(compaction::Compaction { budget_tokens: cfg.compaction_budget_tokens, keep_recent: cfg.compaction_keep_recent, prune_min_chars: 600 }),
+        Arc::new(compaction::Compaction { budget_tokens: cfg.compaction_budget_tokens, keep_recent: cfg.compaction_keep_recent, prune_min_chars: 600, pin_chars: 16_000 }),
         Arc::new(guards::RepeatToolReminder { thresholds: cfg.repeat_thresholds.clone(), exclude: vec!["todo_write".into(), "task_list".into()] }),
         Arc::new(guards::ContinuationGuard { max_nudges: 2 }),
-        Arc::new(guards::Spill { chars: cfg.spill_chars, locate: cfg.spill_locator.clone() }),
+        Arc::new(guards::Spill { chars: cfg.spill_chars, locate: cfg.spill_locator.clone(), exclude: cfg.spill_exclude.clone() }),
         Arc::new(todo::Todo),
         Arc::new(subagent::SubagentPlugin { max_depth: cfg.max_depth }),
         Arc::new(team_board::TeamBoardPlugin),
     ];
+    let mut all = all;
+    if cfg.pin_facts {
+        all.push(Arc::new(audit::FactAudit { max_nudges: 1, min_digits: 3 }));
+    }
     all.into_iter().filter(|p| !cfg.disabled.contains(&p.name())).collect()
 }

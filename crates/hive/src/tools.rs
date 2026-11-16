@@ -6,6 +6,7 @@
 //!   → monotonic guards (deny or abstain) → tools/execute waterfall around the tool body
 //!   → tools/post-execute waterfall (in model order; may replace the result or add context)
 //!   → finalize (clip) → tools/result notification → tool/result (logged)
+//!   → facts/set (logged, one per fact set the tool pinned to its result)
 //! ```
 //!
 //! Calls are scheduled by execution mode: consecutive `Concurrent` calls run together on a
@@ -22,6 +23,7 @@ use th_llm::ToolSpec;
 use crate::agent::Agent;
 use crate::context::Context;
 use crate::events::{Emit, Waterfall};
+use crate::facts::{self, FactRecord, FactSet};
 use crate::session::{CallRecord, EventBody};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +42,9 @@ pub struct ToolOutput {
     pub meta: Value,
     /// (source, text) context injected after the batch's results.
     pub additional_context: Vec<(String, String)>,
+    /// Values pinned to this result: logged with it and shown again, exactly, once the
+    /// result is pruned or summarised away.
+    pub facts: Vec<FactSet>,
 }
 
 impl ToolOutput {
@@ -167,6 +172,8 @@ pub struct ToolRegistry {
     pub max_parallel: usize,
     /// Longest tool result the model sees (characters).
     pub max_result_chars: usize,
+    /// Log the facts tools pin to their results.
+    pub pin_facts: bool,
 }
 
 impl Default for ToolRegistry {
@@ -181,6 +188,7 @@ impl Default for ToolRegistry {
             result: Emit::new("tools/result"),
             max_parallel: 8,
             max_result_chars: 20_000,
+            pin_facts: true,
         }
     }
 }
@@ -297,7 +305,14 @@ impl ToolRegistry {
                 }
                 context.append(&mut out.additional_context);
                 self.result.emit(&ToolResultNote { agent: agent.clone(), call_id: c.id.clone(), tool: c.name.clone(), args, output: out.clone() });
-                agent.session.append(EventBody::ToolResult { id: c.id.clone(), name: c.name.clone(), text: out.text, is_error: out.is_error, meta: out.meta });
+                let source = agent.session.append(EventBody::ToolResult { id: c.id.clone(), name: c.name.clone(), text: out.text, is_error: out.is_error, meta: out.meta });
+                if !out.is_error && self.pin_facts {
+                    for set in out.facts.into_iter().filter(|s| !s.facts.is_empty()) {
+                        if let Ok(data) = serde_json::to_value(FactRecord { source, tool: c.name.clone(), set }) {
+                            agent.session.append(EventBody::Custom { kind: facts::KIND.into(), data });
+                        }
+                    }
+                }
             }
         }
         for (source, text) in context {
