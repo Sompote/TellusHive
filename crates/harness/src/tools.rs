@@ -115,8 +115,8 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         ),
         spec(
             "get_clause",
-            "Read one clause (and its sub-clauses) of a standard by number.",
-            json!({"type":"object","properties":{"code":{"type":"string","description":"Standard code or id, e.g. 'ACI 318-19'"},"clause":{"type":"string","description":"e.g. '22.5.5.1'"}},"required":["code","clause"]}),
+            "Read one clause (and its sub-clauses) of a standard by number. A document that holds several parts may use one number more than once (Annex D of two parts): the reply then lists each title and page, and `title` picks the one you mean.",
+            json!({"type":"object","properties":{"code":{"type":"string","description":"Standard code or id, e.g. 'ACI 318-19'"},"clause":{"type":"string","description":"e.g. '22.5.5.1'"},"title":{"type":"string","description":"Optional words from the clause title or text, to pick among clauses with the same number, e.g. 'drained'"}},"required":["code","clause"]}),
         ),
         spec("list_design_modules", "List the built-in, verified design modules with their input schemas.", json!({"type":"object","properties":{}})),
         spec(
@@ -129,7 +129,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
         ),
         spec(
             "calc_sheet",
-            "Write a traceable calculation: inputs, then steps evaluated in order (each step's symbol becomes a variable for later steps), each with its clause reference, and optional demand<=capacity checks. Expressions: + - * / ^ ( ), sqrt abs exp ln log10 sin cos tan (radians) sind cosd tand (degrees) min max floor ceil round, pi. Saved to calcs/<name>.",
+            "Write a traceable calculation: inputs, then steps evaluated in order (each step's symbol becomes a variable for later steps), each with its clause reference, and optional demand<=capacity checks. Expressions: + - * / ^ ( ), sqrt abs exp ln log10, sin cos tan asin acos atan atan2(y,x) (radians), sind cosd tand asind acosd atand (degrees), rad(deg) deg(rad), min max floor ceil round, pi. Angles in soil mechanics are in degrees: use the *d functions. Each symbol is defined once (inputs and steps). Saved to calcs/<name>.",
             json!({"type":"object","properties":{
                 "name":{"type":"string"},
                 "title":{"type":"string"},
@@ -206,6 +206,12 @@ fn need_str<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> {
 }
 
 /// Maps "ACI 318-19" or "aci-318-19" to a library id.
+/// A clause label without its kind word and spaces, lower case ("Clause D.4" -> "d.4").
+pub(crate) fn clause_label(s: &str) -> String {
+    let (kind, bare) = th_kb::clause_key(s);
+    format!("{kind}:{bare}")
+}
+
 pub(crate) fn resolve_standard(lib: &Library, code: &str) -> Option<String> {
     let norm = |s: &str| s.to_ascii_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
     let n = norm(code);
@@ -434,9 +440,29 @@ pub fn exec_builtin(ctx: &Ctx, name: &str, a: &Value) -> Result<ToolOut, String>
             let code = need_str(a, "code")?;
             let clause = need_str(a, "clause")?;
             let id = resolve_standard(ctx.library, code).ok_or_else(|| format!("standard '{code}' is not in the library"))?;
-            let hits = ctx.library.clause(&id, clause);
+            let mut hits = ctx.library.clause(&id, clause);
             if hits.is_empty() {
                 return Ok(ToolOut::text(format!("Clause {clause} was not found in {code}. Try search_standards with words from the clause.")));
+            }
+            let want = crate::tools::clause_label(clause);
+            // the same number with different titles: parts of one document that reuse numbers
+            let mut same: Vec<(String, u32)> = vec![];
+            for h in hits.iter().filter(|h| crate::tools::clause_label(&h.clause) == want) {
+                let t = h.title.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !same.iter().any(|(x, _)| x.eq_ignore_ascii_case(&t)) {
+                    same.push((t, h.page.unwrap_or(0)));
+                }
+            }
+            if let Some(words) = arg_str(a, "title").map(|w| w.to_lowercase()).filter(|w| !w.trim().is_empty()) {
+                let picked: Vec<_> = hits.iter().filter(|h| words.split_whitespace().all(|w| h.title.to_lowercase().contains(w) || h.text.to_lowercase().contains(w))).cloned().collect();
+                if picked.is_empty() {
+                    return Ok(ToolOut::text(format!("No clause {clause} in {code} has '{words}' in its title or text. The clauses numbered {clause} are: {}.", same.iter().map(|(t, p)| format!("'{t}' (p. {p})")).collect::<Vec<_>>().join("; "))));
+                }
+                hits = picked;
+            } else if same.len() > 1 {
+                let list = same.iter().map(|(t, p)| format!("'{t}' (p. {p})")).collect::<Vec<_>>().join("; ");
+                let head = format!("NOTE: {code} uses clause {clause} more than once, with different titles (the document holds several parts): {list}. Read the one whose title fits your question, or call get_clause again with `title` to get only that one.\n\n");
+                return Ok(ToolOut::text(clip(&(head + &hits_text(&hits)), 16_000)));
             }
             Ok(ToolOut::text(clip(&hits_text(&hits), 16_000)))
         }

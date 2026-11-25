@@ -18,12 +18,12 @@ Documentation: [architecture](docs/architecture.md) · [user guide](docs/guide.m
 
 ## Download
 
-Version 0.1.8 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.8):
+Version 0.1.9 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.9):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.8-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.8/TellusHive-0.1.8-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.8-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.8/TellusHive-0.1.8-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.9-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.9/TellusHive-0.1.9-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.1.9-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.9/TellusHive-0.1.9-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,9 +32,34 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.8
+### What is new in 0.1.9
 
-Agents can now run on an open-weight model served by **vLLM**, either on your own computer or on a
+The window now opens on **Bots**, a messenger-style workspace where the engineer talks to a
+project-manager bot the way one would message a colleague, while the teams and projects sit one
+layer below. Each bot has its own name, picture, character, reply language, model and
+conversation, and it either works alone or calls saved teams, through their coordinator, and
+other bots, so one message can set a whole design office to work while the chat shows who is
+doing what. A bot can use a shared provider or its own API, and Claude Code, Codex or Google
+Antigravity (`agy`) can serve as its model. **New conversation** now sits in the chat header,
+beside the bot's name, and asks before it clears the chat; the earlier session stays in the
+project's `sessions/` folder.
+
+The standards library has moved to **Settings › Standards library**, because it is one pool for
+every project and bot rather than part of a project. Standards are imported, re-indexed, browsed
+and deleted there, and an office rule is attached to the standard you pick, whereas the
+project's **Standards** tab now only switches on the standards that project follows. A project
+that still names a standard deleted from the library searches the rest instead of failing every
+search.
+
+Other agents can now reach the bots. The window runs an MCP server on `127.0.0.1:8795` with the
+tools `list_bots`, `list_teams`, `ask_bot` and `ask_team`, so Claude Code, Codex, `agy` or Claude
+Desktop on the same computer can hand work to a bot and get its reply, while the work shows in
+that bot's chat. The new `tellushive serve` command serves the bots over HTTP without the window,
+with a bearer token, streamed replies and file upload, for a cloud machine behind an HTTPS
+tunnel, and `ios/` holds the source of a SwiftUI iPhone app that talks to it. The iPhone app has
+not been built or tested on a device yet, so treat it as a preview of the source.
+
+From 0.1.8, agents can run on an open-weight model served by **vLLM**, either on your own computer or on a
 GPU rented from a service such as Vast.ai, so a design office can keep its data on hardware it
 controls and pay for GPU hours instead of tokens. **Settings** has two new providers, `vllm` at
 `http://localhost:8000/v1` and `vllm-vast` for a remote instance, and a **vLLM server** switch
@@ -99,8 +124,9 @@ design office** in step **3 Team** to get the new wording, then add your changes
    instead.
 2. **Make a project.** On the **Home** page, start from an example, a template or a one-line
    brief. Step **1 Project** holds the description and the notes every agent reads.
-3. **Choose the standards.** In step **2 Standards**, import the codes you design to (PDF, text
-   or Markdown) and tick the ones this project follows, so agents cite real clauses.
+3. **Choose the standards.** Import the codes you design to (PDF, text or Markdown) once under
+   **Settings › Standards library**, then switch on the ones this project follows under
+   **Project › Standards**, or in a bot's **Setup**, so agents cite real clauses.
 4. **Check the team.** Step **3 Team** shows the coordinator and the specialists. Click an agent
    to set its model, its **Thinking** (off by default), its **Time limit**, its tools and its
    plugins. The arrows show who may delegate to whom.
@@ -153,6 +179,7 @@ explains the workspaces, the team canvas, templates and the engineering programs
 ./target/release/tellushive run --project DIR "Design a ..."   # one turn in the terminal
 ./target/release/tellushive plugins [--project DIR]            # the plugin tree (like dsh --dump-config)
 ./target/release/tellushive --mcp --project DIR                # the engineering tools as an MCP server
+./target/release/tellushive serve [--port 8796]                # the bots over HTTP, for the iPhone app (ios/README.md)
 ```
 
 ## Development
@@ -162,7 +189,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 120 tests, no API key needed
+cargo test --workspace     # 145 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step

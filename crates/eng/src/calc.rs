@@ -121,6 +121,11 @@ pub fn run_sheet(input: &CalcInput) -> Result<Sheet, String> {
         if !expr::is_identifier(&s.symbol) {
             return Err(format!("step {} '{}': symbol must be letters, digits and underscores, starting with a letter", k + 1, s.symbol));
         }
+        // a symbol is defined once, so the inputs and steps printed are what was used
+        if vars.contains_key(&s.symbol) {
+            let what = if input.inputs.iter().any(|v| v.symbol == s.symbol) { "an input" } else { "an earlier step" };
+            return Err(format!("step {} '{}': the symbol is already {what}; give the new value its own name (e.g. {}_2)", k + 1, name, s.symbol));
+        }
         let value = expr::eval(&s.expr, &vars).map_err(|e| format!("step {} '{}' ({}): {e}", k + 1, name, s.expr))?;
         let substituted = expr::substitute(&s.expr, &vars);
         vars.insert(s.symbol.clone(), value);

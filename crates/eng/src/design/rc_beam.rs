@@ -192,6 +192,14 @@ pub(super) fn run(a: &Value) -> Result<Design, String> {
         }
     }
     if sb.get("s") <= 0.0 {
+        // no stirrups can help when the steel shear needed is above the limit of 22.5.1.2
+        let vs_max = 0.66 * sb.get("rf_c") * sb.get("b") * sb.get("d") / 1000.0;
+        let vs_req = Some(sb.get("V_sreq")).filter(|v| v.is_finite()).unwrap_or(0.0);
+        if vs_req > vs_max {
+            return Err(format!(
+                "the section is too small for the shear: Vs needed = {vs_req:.0} kN exceeds 0.66 sqrt(f'c) b d = {vs_max:.0} kN (ACI 318-19 22.5.1.2), so no stirrups can carry it. Enlarge b or h, or raise f'c"
+            ));
+        }
         return Err("the designed stirrup spacing rounds to zero: increase the stirrup size or legs, or the section".into());
     }
     sb.check("V_s", "A_v*f_ytv*d/s/1000", "kN", "stirrup shear strength", "ACI 318-19 22.5.8.5.3", "V_s", "0.66*rf_c*b*d/1000", "Vs <= 0.66 sqrt(f'c) b d (22.5.1.2)")?;

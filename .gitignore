@@ -8,3 +8,6 @@
 # research data and manuscript drafts, kept local
 /experiments
 /paper
+
+# local logs of the design checks
+.ds-receipts/

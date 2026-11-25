@@ -224,12 +224,28 @@ fn call(name: &str, a: &[f64]) -> Result<f64, String> {
                 one(f64::log10)?
             }
         }
+        // an angle above 2 pi radians in a design calculation is a degree slip (sin(30) for
+        // sin(30 deg) gives nonsense such as Ka = 166), so it is refused with the fix
+        "sin" | "cos" | "tan" if a.len() == 1 && a[0].abs() > 2.0 * std::f64::consts::PI + 1e-9 => {
+            return Err(format!("{name}() takes radians, and {} is more than 2 pi: if the angle is in degrees, use {name}d({})", a[0], a[0]));
+        }
         "sin" => one(f64::sin)?,
         "cos" => one(f64::cos)?,
         "tan" => one(f64::tan)?,
         "asin" => one(f64::asin)?,
         "acos" => one(f64::acos)?,
         "atan" => one(f64::atan)?,
+        "rad" => one(f64::to_radians)?,
+        "deg" => one(f64::to_degrees)?,
+        "asind" => one(|x| x.asin().to_degrees())?,
+        "acosd" => one(|x| x.acos().to_degrees())?,
+        "atand" => one(|x| x.atan().to_degrees())?,
+        "atan2" => {
+            if a.len() != 2 {
+                return Err(format!("atan2() takes 2 arguments (y, x), got {}", a.len()));
+            }
+            a[0].atan2(a[1])
+        }
         "sind" => one(|x| x.to_radians().sin())?,
         "cosd" => one(|x| x.to_radians().cos())?,
         "tand" => one(|x| x.to_radians().tan())?,

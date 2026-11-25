@@ -84,7 +84,7 @@ impl Ws {
     fn layer(self) -> Ws {
         match self {
             Ws::Standards => Ws::Project,
-            Ws::Plugins => Ws::Project,
+            Ws::Plugins | Ws::Output => Ws::Project,
             Ws::Design => Ws::Bots,
             w => w,
         }
@@ -92,13 +92,14 @@ impl Ws {
     /// The tabs inside a layer's panel.
     fn tabs(self) -> &'static [(Ws, &'static str)] {
         match self.layer() {
-            Ws::Project => &[(Ws::Project, "Details"), (Ws::Standards, "Standards"), (Ws::Plugins, "Plugins")],
+            Ws::Project => &[(Ws::Project, "Details"), (Ws::Standards, "Standards"), (Ws::Plugins, "Plugins"), (Ws::Output, "Output")],
             _ => &[],
         }
     }
     fn about(self) -> &'static str {
         match self {
-            Ws::Project => "What the bots and teams work on: the project, its notes, the standards it follows and the programs it uses.",
+            Ws::Project => "What the bots and teams work on: the project folder, its notes, the standards it follows, the programs it uses and what they produced.",
+            Ws::Output => "The calculations, drawings and reports in this project's folder.",
             Ws::Standards => "The standards this project follows. The agents search only these and cite their clauses.",
             Ws::Team => "A team a bot can call: its coordinator leads it, like another bot, and the agents do the work.",
             Ws::Plugins => "The programs this project's agents drive through MCP: the Tellus family, Pondus, Aedifex, Granum, ContinuaX, CADCraft.",
@@ -108,7 +109,7 @@ impl Ws {
     fn help(self) -> &'static str {
         match self {
             Ws::Project => "Each project is a folder with its attachments, calculations, drawings and reports. The description and notes are added to every agent's instructions: put the client, the site, the units and any office rule here.",
-            Ws::Standards => "Import your own copies of the standards (PDF, text or Markdown) into the library once; then switch on the ones this project follows. Agents search only the chosen standards and cite clause numbers from what they find. Office rules can be added as notes.",
+            Ws::Standards => "Switch on the standards this project follows. The library itself, where standards are imported and office rules added, is one pool for every project under Settings › Standards library. Agents search only the chosen standards and cite clause numbers from what they find.",
             Ws::Team => "The coordinator talks with you and delegates to the others along the arrows. Each agent has its own instructions, model, built-in tools, skills (folders with SKILL.md) and plugins. Changes are saved automatically.",
             Ws::Plugins => "A plugin is an MCP server: a program started with arguments (stdio) or an HTTP endpoint. Equip agents with plugins in the Team layer, and a bot's own plugins in its profile. Tellus, Tellus3D and CADCraft are found automatically.",
             _ => "",
@@ -126,6 +127,13 @@ pub struct App {
     chat_open: bool,
     /// The Bots workspace: bots with their own picture, character and conversation.
     bots: BotsView,
+    /// Messages from agents connected to the window's MCP server.
+    bridge: Option<std::sync::mpsc::Receiver<crate::bridge::Request>>,
+    /// Whether the MCP server is running, or why not.
+    pub bridge_status: String,
+    /// TELLUSHIVE_QA: the test robot playing a script into the window.
+    qa: Option<crate::qa::Qa>,
+    qa_idle_until: Option<Instant>,
     viewer: Viewer,
     team_view: TeamView,
     std_view: StandardsView,
@@ -186,15 +194,19 @@ impl App {
         let tpl_name = project.info.name.clone();
         let _ = write_json(&state_path(), &AppState { last_project: project.dir.display().to_string() }, false);
         let shot = std::env::var("TELLUSHIVE_SHOT").ok().map(|d| (PathBuf::from(d), 0, 0));
-        Ok(App {
+        let mut app = App {
             engine,
             settings,
             team,
             project,
-            ws: if had_project { Ws::Design } else { Ws::Home },
+            ws: if had_project { Ws::Bots } else { Ws::Home },
             chat,
             chat_open: false,
             bots: BotsView::default(),
+            bridge: None,
+            bridge_status: String::new(),
+            qa: crate::qa::Qa::from_env(),
+            qa_idle_until: None,
             viewer: Viewer::default(),
             team_view: TeamView::default(),
             std_view: StandardsView::default(),
@@ -217,7 +229,12 @@ impl App {
             windows: Default::default(),
             run_models: vec![],
             shot,
-        })
+        };
+        // a screenshot run must not take the port of the window the engineer has open
+        if app.shot.is_none() {
+            app.start_bridge(&cc.egui_ctx);
+        }
+        Ok(app)
     }
 
     fn switch_project(&mut self, p: Project) {
@@ -349,6 +366,60 @@ impl App {
         self.project_dirty = Some(Instant::now());
     }
 
+    /// Starts the MCP server for other agents, once, when it is switched on.
+    fn start_bridge(&mut self, ctx: &egui::Context) {
+        if !self.settings.bridge.enabled {
+            self.bridge_status = "off".into();
+            return;
+        }
+        if self.settings.bridge.token.is_empty() {
+            self.settings.bridge.token = th_harness::config::BridgeSettings::new_token();
+            self.settings_dirty = Some(Instant::now());
+        }
+        match crate::bridge::start(&self.settings, ctx.clone()) {
+            Ok(rx) => {
+                self.bridge = Some(rx);
+                self.bridge_status = format!("running at {}", self.settings.bridge.url());
+            }
+            Err(e) => self.bridge_status = format!("not running: {e}"),
+        }
+    }
+
+    /// Passes the connected agents' messages to the bots and teams.
+    fn take_bridge(&mut self, ctx: &egui::Context) {
+        let reqs: Vec<crate::bridge::Request> = match &self.bridge {
+            Some(rx) => rx.try_iter().collect(),
+            None => return,
+        };
+        for r in reqs {
+            match r.target {
+                crate::bridge::Target::Bot(who) => {
+                    let engine = self.engine.clone();
+                    self.bots.external_ask(&who, &r.text, r.reply, &engine, ctx);
+                }
+                crate::bridge::Target::Team(who) => {
+                    let Some(name) = TeamSpec::list().into_iter().map(|t| t.name).find(|n| n.eq_ignore_ascii_case(who.trim())) else {
+                        let _ = r.reply.send(Err(format!("no team named '{who}'. The teams are: {}", TeamSpec::list().into_iter().map(|t| t.name).collect::<Vec<_>>().join(", "))));
+                        continue;
+                    };
+                    if self.chat.busy() {
+                        let _ = r.reply.send(Err(format!("{} is working on another task; ask again when it has finished", self.team.name)));
+                        continue;
+                    }
+                    self.select_team(&name);
+                    if self.team.name != name {
+                        let _ = r.reply.send(Err(format!("could not switch to the team '{name}'")));
+                        continue;
+                    }
+                    self.chat.external_reply = Some(r.reply);
+                    let engine = self.engine.clone();
+                    self.chat.send_text(&engine, ctx, &r.text);
+                    self.status = format!("{name} got a message from a connected agent");
+                }
+            }
+        }
+    }
+
     /// Talks to another saved team in the open project: its agents and its own conversation.
     /// The project remembers it as its team.
     fn select_team(&mut self, name: &str) {
@@ -385,6 +456,60 @@ impl App {
             self.chat.save(&self.project.dir);
             self.chat = ChatView::for_team(&self.project.dir, &self.team.name);
         }
+    }
+
+    /// One step of the test robot, every frame while a script runs.
+    fn qa_step(&mut self, ctx: &egui::Context) {
+        let Some(mut q) = self.qa.take() else { return };
+        ctx.request_repaint();
+        q.take_screenshot(ctx);
+        if let Some(until) = self.qa_idle_until {
+            let idle = !self.chat.busy() && self.bots.busy_count() == 0;
+            if !idle && Instant::now() < until {
+                self.qa = Some(q);
+                return;
+            }
+            q.log(&format!("  idle: {idle}"));
+            self.qa_idle_until = None;
+        }
+        if !q.busy() {
+            match q.steps.pop_front() {
+                None => {
+                    q.log("end of script");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Some(line) => {
+                    q.n += 1;
+                    q.log(&format!("{:3} {line}", q.n));
+                    let (cmd, rest) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+                    if !q.command(cmd, rest, ctx) {
+                        match cmd {
+                            "ws" => {
+                                let w = [Ws::Home, Ws::Bots, Ws::Team, Ws::Project, Ws::Standards, Ws::Plugins, Ws::Output, Ws::Design, Ws::Settings].into_iter().find(|w| format!("{w:?}").eq_ignore_ascii_case(rest.trim()));
+                                match w {
+                                    Some(w) => self.ws = w,
+                                    None => q.log(&format!("  ! no workspace {rest}")),
+                                }
+                            }
+                            "status" => q.log(&format!(
+                                "  ws={:?} status={:?} team={:?} project={:?} dir={:?} bots={} busy={} bridge={:?}",
+                                self.ws,
+                                self.status,
+                                self.team.name,
+                                self.project.info.name,
+                                self.project.dir.display().to_string(),
+                                self.bots.bots.len(),
+                                self.chat.busy() || self.bots.busy_count() > 0,
+                                self.bridge_status
+                            )),
+                            "waitidle" => self.qa_idle_until = Some(Instant::now() + Duration::from_secs(rest.trim().parse().unwrap_or(120))),
+                            _ => q.log(&format!("  ! unknown command {cmd}")),
+                        }
+                    }
+                }
+            }
+        }
+        self.qa = Some(q);
     }
 
     fn agent_colours(&self) -> Vec<(String, Color32)> {
@@ -469,9 +594,9 @@ impl App {
 
                 // the layers, centred: Bots › Team › Project, then Output
                 let font = egui::FontId::proportional(13.0);
-                let labels: f32 = ["Bots", "Team", "Project", "Output"].iter().map(|l| ui.fonts(|f| f.layout_no_wrap(l.to_string(), font.clone(), t.text).size().x)).sum();
+                let labels: f32 = ["Bots", "Team", "Project"].iter().map(|l| ui.fonts(|f| f.layout_no_wrap(l.to_string(), font.clone(), t.text).size().x)).sum();
                 let busy_w = if self.chat.busy() { 190.0 } else { 0.0 };
-                let strip_w = labels + 4.0 * 50.0 + 2.0 * 22.0 + 13.0 + 24.0 + busy_w;
+                let strip_w = labels + 3.0 * 50.0 + 2.0 * 22.0 + 24.0 + busy_w;
                 let right_w = 200.0;
                 ui.add_space(((ui.available_width() - right_w - strip_w) / 2.0).max(8.0));
                 let layer = self.ws.layer();
@@ -496,8 +621,8 @@ impl App {
                             self.ws = ws;
                         }
                     }
-                    chrome::strip_divider(ui);
                     if self.chat.busy() {
+                        chrome::strip_divider(ui);
                         ui.spacing_mut().item_spacing.x = 8.0;
                         ui.add_space(6.0);
                         ui.spinner();
@@ -510,11 +635,6 @@ impl App {
                         if ui.add(egui::Button::new("Watch").frame(false)).clicked() {
                             self.ws = Ws::Design;
                         }
-                        chrome::strip_divider(ui);
-                    }
-                    let state = if self.ws == Ws::Output { chrome::StepState::Current } else { chrome::StepState::Todo };
-                    if chrome::step_button(ui, None, Some(Icon::FileText), "Output", state).on_hover_text("Calculations, drawings and reports of the project").clicked() {
-                        self.ws = Ws::Output;
                     }
                 });
 
@@ -557,7 +677,7 @@ impl App {
                 let lib = self.engine.library.list();
                 let chosen = lib.iter().filter(|m| self.project.info.standards.contains(&m.id)).count();
                 let ready = self.settings.plugins.iter().filter(|p| matches!(self.engine.plugins.state_of(&p.name), PluginState::Ready { .. })).count();
-                ui.label(RichText::new(format!("{chosen} of {} standards · {} team members · {ready} plugins connected", lib.len(), self.team.agents.len())).size(12.0).color(t.text_dim));
+                ui.label(RichText::new(format!("{chosen} of {} standards · {} · {ready} plugins connected", lib.len(), if self.team.agents.len() == 1 { "1 agent".to_string() } else { format!("{} agents", self.team.agents.len()) })).size(12.0).color(t.text_dim));
                 if !self.status.is_empty() {
                     ui.label(RichText::new(&self.status).size(12.0).color(t.text_faint));
                 }
@@ -649,6 +769,37 @@ impl App {
         self.step_panel(ctx, |app, ui| {
             let t = Tokens::get(ui.ctx());
             let mut changed = false;
+            chrome::explorer(ui, "Project folder", "", |ui| {
+                ui.label(RichText::new("The folder on disk that is this project: its attachments, calculations, drawings, reports and the chats.").size(11.5).color(t.text_dim));
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(chrome::display_path(&app.project.dir).display().to_string()).monospace().size(12.0)).wrap());
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(!app.chat.busy(), egui::Button::new("Choose folder…")).on_hover_text("Work in another folder: opens it as a project, or makes it one").on_disabled_hover_text("Stop the running task first").clicked() {
+                        let start = app.project.dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from(&app.settings.projects_dir));
+                        if let Some(d) = rfd::FileDialog::new().set_directory(start).pick_folder() {
+                            match Project::open_or_create(&d) {
+                                Ok(p) => app.switch_project(p),
+                                Err(e) => app.status = e,
+                            }
+                        }
+                    }
+                    if ui.button("Show in Finder").clicked() {
+                        chrome::open_path(&app.project.dir);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut app.new_project).hint_text("new project name").desired_width(170.0));
+                    let ok = !app.new_project.trim().is_empty() && !app.chat.busy();
+                    if ui.add_enabled(ok, egui::Button::new("New project")).on_hover_text(format!("A new folder in {}", app.settings.projects_dir)).clicked() {
+                        let name = std::mem::take(&mut app.new_project);
+                        if let Err(e) = app.new_project_named(name.trim()) {
+                            app.status = e;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+            });
             chrome::explorer(ui, "Project", "", |ui| {
                 changed |= chrome::field(ui, "Name", &mut app.project.info.name).changed();
                 ui.add_space(4.0);
@@ -709,7 +860,7 @@ impl App {
             let ready = self.settings.plugins.iter().filter(|p| p.enabled).count();
             let counts = |k: ArtifactKind| self.artifacts.iter().filter(|a| a.kind == k).count();
             let cards: [(Ws, Icon, String, String); 5] = [
-                (Ws::Design, Icon::Chat, "Bots".into(), format!("Design office: {} messages · {} own bots", self.chat.saved.entries.iter().filter(|e| matches!(e, crate::chat::Entry::User { .. })).count(), self.bots.bots.len())),
+                (Ws::Design, Icon::Chat, "Bots".into(), format!("{}: {} messages · {} own bots", self.team.name, self.chat.saved.entries.iter().filter(|e| matches!(e, crate::chat::Entry::User { .. })).count(), self.bots.bots.len())),
                 (Ws::Team, Icon::Users, "Team".into(), format!("{}: {}", self.team.name, self.team.agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "))),
                 (Ws::Plugins, Icon::Plug, "Project · Plugins".into(), format!("{ready} available: {}", self.settings.plugins.iter().filter(|p| p.enabled).map(|p| p.name.clone()).collect::<Vec<_>>().join(", "))),
                 (Ws::Standards, Icon::Library, "Project · Standards".into(), if chosen.is_empty() { "None chosen yet".into() } else { chosen.join(", ") }),
@@ -751,10 +902,9 @@ impl App {
 
     fn standards_ws(&mut self, ctx: &egui::Context) {
         let lib = self.engine.library.clone();
-        let emb = self.settings.embedder.clone();
         let mut changed = false;
         self.step_panel(ctx, |app, ui| {
-            changed |= app.std_view.left(ui, &lib, &mut app.project.info.standards, &emb);
+            changed |= app.std_view.left(ui, &lib, &mut app.project.info.standards);
         });
         egui::CentralPanel::default().frame(Self::canvas_frame(ctx).inner_margin(16)).show(ctx, |ui| {
             Self::dots(ui);
@@ -762,6 +912,10 @@ impl App {
         });
         if changed {
             self.apply_project();
+        }
+        if std::mem::take(&mut self.std_view.open_settings) {
+            self.ws = Ws::Settings;
+            self.set_view.show_library();
         }
     }
 
@@ -983,14 +1137,7 @@ impl App {
     }
 
     fn output_ws(&mut self, ctx: &egui::Context) {
-        let t = Tokens::get(ctx);
-        let edge = egui::Stroke::new(1.0_f32, t.separator);
-        egui::SidePanel::left("out_list").resizable(true).default_width(340.0).min_width(260.0).frame(egui::Frame::NONE.fill(t.chrome).stroke(edge).inner_margin(egui::Margin { left: 16, right: 12, top: 18, bottom: 8 })).show(ctx, |ui| {
-            ui.label(RichText::new("Output").font(medium_font(17.0)));
-            ui.label(RichText::new("The calculations, drawings and reports of this project.").size(12.5).color(t.text_dim));
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.deliverables(ui));
-        });
+        self.step_panel(ctx, |app, ui| app.deliverables(ui));
         egui::CentralPanel::default().frame(Self::canvas_frame(ctx).inner_margin(16)).show(ctx, |ui| {
             Self::dots(ui);
             if self.viewer.path.is_none() {
@@ -1012,11 +1159,25 @@ impl App {
             self.set_view.nav(ui);
         });
         let mut changed = false;
+        let lib = self.engine.library.clone();
+        let mut deleted = None;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.field).inner_margin(egui::Margin { left: 40, right: 40, top: 24, bottom: 16 })).show(ctx, |ui| {
-            changed = self.set_view.ui(ui, &mut self.settings);
+            let std_view = &mut self.std_view;
+            changed = self.set_view.ui(ui, &mut self.settings, &mut |ui, s| {
+                if let Some(id) = std_view.manage(ui, &lib, &s.embedder) {
+                    deleted = Some(id);
+                }
+            });
         });
         if changed {
             self.apply_settings();
+        }
+        // the open project stops following a standard deleted from the library
+        if let Some(id) = deleted {
+            if self.project.info.standards.contains(&id) {
+                self.project.info.standards.retain(|x| *x != id);
+                self.apply_project();
+            }
         }
         if self.set_view.take_skills_changed() {
             self.engine.rescan_skills();
@@ -1456,8 +1617,15 @@ fn ago(t: std::time::SystemTime) -> String {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(q) = self.qa.as_mut() {
+            q.input(raw_input);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.shot_step(ctx);
+        self.qa_step(ctx);
         let saves: Vec<(String, PathBuf)> = self.chat.model_saves.drain(..).collect();
         for (plugin, path) in saves {
             if !self.run_models.contains(&plugin) {
@@ -1474,6 +1642,7 @@ impl eframe::App for App {
             }
         }
         self.bots.poll_all();
+        self.take_bridge(ctx);
         if let Some(dir) = self.bots.project_edited.take() {
             // a bot set up the open project with its standards and plugins
             if dir == self.project.dir {

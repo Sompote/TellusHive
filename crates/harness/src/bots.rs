@@ -47,12 +47,16 @@ pub struct Bot {
     pub temperature: f32,
     pub tools: Vec<String>,
     pub skills: Vec<String>,
-    /// The bot's bundle, applied to the project it works on: the plugins ("*" = every
-    /// enabled one) and the standards (library ids) its agents may use.
+    /// The bot's bundle, applied to the project it works on: the plugins it drives and its
+    /// project allows ("*" = every enabled one; empty = none for the bot, and the project's
+    /// own set is left alone) and the standards (library ids) its agents may use.
     pub plugins: Vec<String>,
     pub standards: Vec<String>,
     /// Other bots (ids) it may hand work to.
     pub calls: Vec<String>,
+    /// May hand work to any saved team (through its lead) or other bot; when false, only to
+    /// the team and the bots chosen in `team` / `calls`.
+    pub call_any: bool,
     /// Its own LLM API (base URL, key, model) instead of a provider from Settings.
     pub own_api: Option<th_llm::Provider>,
     pub can_use_external: bool,
@@ -80,12 +84,14 @@ impl Default for Bot {
             temperature: 0.3,
             tools: SOLO_TOOLS.iter().map(|s| s.to_string()).collect(),
             skills: vec!["*".into()],
-            plugins: vec!["*".into()],
+            // each program starts when the bot runs, so a new bot drives none until chosen
+            plugins: vec![],
             can_use_external: false,
             max_turns: 40,
             project: String::new(),
             standards: vec![],
             calls: vec![],
+            call_any: true,
             own_api: None,
             created: 0,
         }
@@ -234,6 +240,8 @@ impl Bot {
     /// them from the chat. Returns true when the bundle changed.
     pub fn take_bundle(&mut self, p: &Project) -> bool {
         let plugins = match &p.info.plugins {
+            // every plugin allowed: a bot that drives none keeps driving none
+            None if self.plugins.is_empty() => vec![],
             None => vec!["*".to_string()],
             Some(l) => l.clone(),
         };
@@ -247,7 +255,13 @@ impl Bot {
 
     /// Sets the project up with the bot's bundle: its standards and plugins.
     pub fn apply_bundle(&self, p: &mut Project) -> Result<(), String> {
-        let plugins = if self.plugins.iter().any(|x| x == "*") { None } else { Some(self.plugins.clone()) };
+        let plugins = if self.plugins.iter().any(|x| x == "*") {
+            None
+        } else if self.plugins.is_empty() {
+            p.info.plugins.clone()
+        } else {
+            Some(self.plugins.clone())
+        };
         if p.info.standards != self.standards || p.info.plugins != plugins {
             p.info.standards = self.standards.clone();
             p.info.plugins = plugins;
@@ -256,9 +270,15 @@ impl Bot {
         Ok(())
     }
 
+    /// The name shown and given to the model; a name being edited may be empty for a moment.
+    pub fn display_name(&self) -> String {
+        let n = self.name.trim();
+        if n.is_empty() { "Unnamed bot".into() } else { n.to_string() }
+    }
+
     /// The words added at the top of the bot's instructions: who it is and how it talks.
     pub fn persona(&self) -> String {
-        let mut s = format!("You are {}, the project manager the engineer talks to directly: you agree the scope with the engineer, get the work done and report back.", self.name);
+        let mut s = format!("You are {}, the project manager the engineer talks to directly: you agree the scope with the engineer, get the work done and report back.", self.display_name());
         if !self.character.trim().is_empty() {
             s.push_str(&format!(" Your character: {}", self.character.trim()));
         }
@@ -282,7 +302,7 @@ impl Bot {
         };
         AgentSpec {
             id: id.to_string(),
-            name: self.name.clone(),
+            name: self.display_name(),
             role: if self.tagline.is_empty() { "Project manager bot".into() } else { self.tagline.clone() },
             instructions: format!("{}\n\n{}", self.persona(), work),
             provider: if self.own_api.is_some() { self.provider_name() } else { self.provider.clone() },
@@ -300,7 +320,7 @@ impl Bot {
                 t
             },
             skills: self.skills.clone(),
-            plugins: vec!["*".into()],
+            plugins: self.plugins.clone(),
             can_delegate: false,
             can_use_external: self.can_use_external,
             max_turns: self.max_turns.max(1),
@@ -310,6 +330,14 @@ impl Bot {
             color: self.color.clone(),
             pos: [60.0, 60.0],
         }
+    }
+
+    /// The bot's own conversation in its project (several bots may work in one project).
+    pub fn chat_key(&self) -> String {
+        format!("bot-{}", crate::project::slug(&self.id).to_lowercase())
+    }
+    pub fn chat_file(&self) -> String {
+        format!("chat-{}.json", self.chat_key())
     }
 
     /// The name of the bot's own provider in its engine's settings.
@@ -333,7 +361,7 @@ impl Bot {
 
     /// Whether the bot hands work to a team or to other bots.
     pub fn calls_anyone(&self) -> bool {
-        self.calls_team() || !self.calls.is_empty()
+        self.call_any || self.calls_team() || !self.calls.is_empty()
     }
     pub fn calls_team(&self) -> bool {
         self.mode == BotMode::Team && !self.team.trim().is_empty()
@@ -344,28 +372,50 @@ impl Bot {
     /// its coordinator as the team lead, who delegates to the team's agents along the team's
     /// own links. A bot called twice, or one that calls back, joins only once.
     pub fn team_spec(&self, all: &[Bot]) -> TeamSpec {
+        let teams = if self.call_any || all.iter().any(|b| b.call_any) { TeamSpec::list() } else { vec![] };
+        self.team_spec_with(all, &teams)
+    }
+
+    /// `team_spec` with the saved teams given (tests pass their own).
+    pub fn team_spec_with(&self, all: &[Bot], teams: &[TeamSpec]) -> TeamSpec {
         let mut agents = vec![self.agent_spec("bot")];
         let mut links: Vec<(String, String)> = vec![];
         let mut seen = std::collections::HashSet::from([self.id.clone()]);
-        self.add_calls("bot", all, &mut agents, &mut links, &mut seen, 0);
+        self.add_calls("bot", all, teams, &mut agents, &mut links, &mut seen, 0);
         for a in agents.iter_mut() {
             a.can_delegate = links.iter().any(|(f, _)| *f == a.id);
         }
-        TeamSpec { name: self.name.clone(), description: self.tagline.clone(), coordinator: "bot".into(), agents, links, custom_links: true }
+        TeamSpec { name: self.display_name(), description: self.tagline.clone(), coordinator: "bot".into(), agents, links, custom_links: true }
     }
 
-    fn add_calls(&self, me: &str, all: &[Bot], agents: &mut Vec<AgentSpec>, links: &mut Vec<(String, String)>, seen: &mut std::collections::HashSet<String>, depth: usize) {
+    /// Adds whom this bot calls: teams join once through their lead (ids prefixed with the
+    /// team, so two teams' coordinators do not clash), bots once each with whom they call.
+    #[allow(clippy::too_many_arguments)]
+    fn add_calls(&self, me: &str, all: &[Bot], teams: &[TeamSpec], agents: &mut Vec<AgentSpec>, links: &mut Vec<(String, String)>, seen: &mut std::collections::HashSet<String>, depth: usize) {
         if depth > 4 {
             return;
         }
-        if self.calls_team() {
-            let team = TeamSpec::load(&self.team);
-            let id = |a: &str| format!("{me}-{a}");
+        let team_names: Vec<String> = if self.call_any {
+            teams.iter().map(|t| t.name.clone()).collect()
+        } else if self.calls_team() {
+            vec![self.team.clone()]
+        } else {
+            vec![]
+        };
+        for name in team_names {
+            if !seen.insert(format!("team:{name}")) {
+                continue;
+            }
+            let team = teams.iter().find(|t| t.name == name).cloned().unwrap_or_else(|| TeamSpec::load(&name));
+            let pre = format!("team-{}", crate::project::slug(&team.name).to_lowercase());
+            let id = |a: &str| format!("{pre}-{a}");
             for a in &team.agents {
                 let mut a = a.clone();
                 if a.id == team.coordinator {
                     a.name = format!("{} lead", team.name);
                     a.role = format!("Team lead of '{}'. {}", team.name, a.role);
+                } else {
+                    a.name = format!("{} ({})", a.name, team.name);
                 }
                 a.id = id(&a.id);
                 agents.push(a);
@@ -375,7 +425,8 @@ impl Bot {
                 links.push((id(&f), id(&t)));
             }
         }
-        for bid in &self.calls {
+        let bot_ids: Vec<String> = if self.call_any { all.iter().map(|b| b.id.clone()).collect() } else { self.calls.clone() };
+        for bid in &bot_ids {
             let Some(b) = all.iter().find(|b| &b.id == bid) else { continue };
             if !seen.insert(b.id.clone()) {
                 continue;
@@ -383,7 +434,7 @@ impl Bot {
             let id = format!("bot-{}", b.id);
             agents.push(b.agent_spec(&id));
             links.push((me.to_string(), id.clone()));
-            b.add_calls(&id, all, agents, links, seen, depth + 1);
+            b.add_calls(&id, all, teams, agents, links, seen, depth + 1);
         }
     }
 
@@ -405,7 +456,11 @@ impl Bot {
         } else {
             settings.provider(&self.provider).map(|p| p.default_model.clone()).unwrap_or_default()
         };
+        let model = if model.is_empty() { "its default model".to_string() } else { model };
         let mut who: Vec<String> = vec![];
+        if self.call_any {
+            return format!("Calls any team or bot · {provider} · {model}");
+        }
         if self.calls_team() {
             who.push(format!("the team '{}'", self.team));
         }
@@ -432,9 +487,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_bot_may_call_any_team_and_bot() {
+        let mut a = Bot::new("A");
+        a.id = "a".into();
+        let mut b = Bot::new("B");
+        b.id = "b".into();
+        b.call_any = false;
+        let office = crate::config::default_team();
+        let mut other = crate::config::default_team();
+        other.name = "Team 2".into();
+        let t = a.team_spec_with(&[a.clone(), b.clone()], &[office.clone(), other.clone()]);
+        let first: Vec<String> = t.reachable("bot").iter().map(|x| x.name.clone()).collect();
+        assert_eq!(first.len(), 3, "{first:?}");
+        assert!(first.contains(&"Design office lead".to_string()) && first.contains(&"Team 2 lead".to_string()) && first.contains(&"B".to_string()));
+        // the two teams' agents keep distinct ids
+        let ids: std::collections::HashSet<&String> = t.agents.iter().map(|x| &x.id).collect();
+        assert_eq!(ids.len(), t.agents.len());
+        assert_eq!(t.agents.len(), 1 + office.agents.len() + other.agents.len() + 1);
+        assert!(t.agent("bot").unwrap().can_delegate);
+    }
+
+    #[test]
     fn a_bot_alone_is_a_team_of_one() {
         let mut b = Bot::new("Clover");
         b.character = "Calm and exact.".into();
+        b.call_any = false;
         let t = b.team_spec(&[]);
         assert_eq!(t.agents.len(), 1);
         assert_eq!(t.coordinator, "bot");
@@ -449,6 +526,7 @@ mod tests {
     #[test]
     fn a_bot_with_its_own_api_gets_its_own_provider() {
         let mut b = Bot::new("Own");
+        b.call_any = false;
         b.own_api = Some(th_llm::Provider { api_key: "sk-test".into(), default_model: "gpt-x".into(), ..th_llm::Provider::openai() });
         let s = Bot::engine_settings(&Settings::default(), &[b.clone()]);
         let p = s.provider(&b.provider_name()).expect("own provider");
@@ -462,6 +540,7 @@ mod tests {
     #[test]
     fn a_bot_calls_a_team_through_its_lead() {
         let mut b = Bot::new("Atlas");
+        b.call_any = false;
         b.mode = BotMode::Team;
         b.team = crate::config::default_team().name;
         let t = b.team_spec(&[]);
@@ -483,6 +562,8 @@ mod tests {
         a.id = "a".into();
         a.calls = vec!["b".into()];
         b.calls = vec!["a".into()];
+        a.call_any = false;
+        b.call_any = false;
         b.mode = BotMode::Team;
         b.team = crate::config::default_team().name;
         let all = vec![a.clone(), b.clone()];

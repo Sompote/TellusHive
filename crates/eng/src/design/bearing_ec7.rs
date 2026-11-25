@@ -108,8 +108,12 @@ pub(super) fn run(a: &Value) -> Result<Design, String> {
     if b_e <= 0.0 || (!strip && sb.get("L_e") <= 0.0) {
         return Err("the eccentricity leaves no effective footing area (B' or L' <= 0)".into());
     }
-    if e_b > b / 6.0 || l.is_some_and(|l| e_l > l / 6.0) {
-        sb.note("The resultant lies outside the middle third (e > B/6): part of the base is in tension; EN 1997-1 6.5.4 asks for special care when e > B/3.");
+    // EN 1997-1 6.5.4(1)P: special precautions shall be taken when e exceeds 1/3 of the width
+    let beyond_third = e_b > b / 3.0 || l.is_some_and(|l| e_l > l / 3.0);
+    if beyond_third {
+        sb.note("The eccentricity exceeds 1/3 of the footing width: EN 1997-1 6.5.4(1)P requires special precautions (review the load cases and construction tolerances, and consider a wider footing). This bearing check alone does not make the footing acceptable.");
+    } else if e_b > b / 6.0 || l.is_some_and(|l| e_l > l / 6.0) {
+        sb.note("The resultant lies outside the middle third (e > B/6): part of the base lifts off; EN 1997-1 6.5.4(1)P requires special precautions if e exceeds B/3.");
     }
 
     // water table: effective overburden q', total overburden q (undrained), gamma' under the base
@@ -218,7 +222,7 @@ pub(super) fn run(a: &Value) -> Result<Design, String> {
             g.3,
             if sheet.all_pass { "all combinations pass" } else { "FAILS" },
             detail
-        ),
+        ) + if beyond_third { " WARNING: the eccentricity exceeds 1/3 of the width; EN 1997-1 6.5.4(1)P requires special precautions, so do not report this footing as adequate on bearing alone." } else { "" },
         None => "no combination evaluated".into(),
     };
     let label = match &gov {

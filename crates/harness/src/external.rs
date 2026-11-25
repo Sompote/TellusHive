@@ -1,4 +1,5 @@
-//! Claude Code and Codex as workers of the coordinator. Each run gets this program's own MCP
+//! Claude Code, Codex and Antigravity (`agy`) as workers of the coordinator or as an
+//! agent's model. Claude Code and Codex as workers of the coordinator. Each run gets this program's own MCP
 //! server (standards library + design tools of the open project), so the external agent can
 //! search the same standards and save calculations into the same project.
 
@@ -16,6 +17,8 @@ use crate::config::ExternalAgent;
 pub enum Which {
     ClaudeCode,
     Codex,
+    /// Google Antigravity's CLI, driven through its Agent Client Protocol server (`agy acp`).
+    Agy,
 }
 
 impl Which {
@@ -23,6 +26,25 @@ impl Which {
         match self {
             Which::ClaudeCode => "claude",
             Which::Codex => "codex",
+            Which::Agy => "agy",
+        }
+    }
+    /// The coding agent a `cli://…` provider runs.
+    pub fn of_provider(base_url: &str) -> Which {
+        if base_url.ends_with("codex") {
+            Which::Codex
+        } else if base_url.ends_with("agy") {
+            Which::Agy
+        } else {
+            Which::ClaudeCode
+        }
+    }
+    /// Its settings.
+    pub fn config(self, s: &crate::config::Settings) -> ExternalAgent {
+        match self {
+            Which::ClaudeCode => s.claude_code.clone(),
+            Which::Codex => s.codex.clone(),
+            Which::Agy => s.agy.clone(),
         }
     }
 }
@@ -145,6 +167,9 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
             cmd.env_remove(k);
         }
     }
+    if which == Which::Agy {
+        return run_acp(&prog, cfg, job, cancel);
+    }
     if cfg.subscription {
         cmd.env_remove(if which == Which::ClaudeCode { "ANTHROPIC_API_KEY" } else { "OPENAI_API_KEY" });
     }
@@ -161,6 +186,9 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
                 let v = json!({"mcpServers": {m.name.clone(): {"command": m.command, "args": m.args, "env": mcp_env(true)}}});
                 std::fs::write(&cfg_path, v.to_string()).map_err(|e| e.to_string())?;
                 cmd.arg("--mcp-config").arg(&cfg_path);
+                // Load only this server, not the user-scope ones (Zotero, Rhino, ...),
+                // so batch runs do not start extra MCP processes per call.
+                cmd.arg("--strict-mcp-config");
                 if job.mcp_only {
                     cmd.arg("--allowedTools").arg(format!("mcp__{}", m.name));
                 }
@@ -184,6 +212,7 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
             cmd.args(&cfg.args);
             cmd.arg("-");
         }
+        Which::Agy => unreachable!("agy runs through ACP"),
     }
     let t0 = Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", prog.display()))?;
@@ -233,6 +262,7 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
             }
             Err(_) => out.text = format!("{stdout}\n{stderr}"),
         },
+        Which::Agy => {}
         Which::Codex => {
             let last = std::fs::read_to_string(&last_msg).unwrap_or_default();
             let _ = std::fs::remove_file(&last_msg);
@@ -241,6 +271,130 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
     }
     out.text = out.text.trim().to_string();
     Ok(out)
+}
+
+/// One turn of Antigravity through its Agent Client Protocol server: `agy acp` on stdio,
+/// a session in the work folder with this program's tool server attached (ACP hands MCP
+/// servers over per session, so nothing is written to the engineer's own agy set-up), the
+/// model chosen, the prompt sent, and the reply gathered from the session's updates.
+/// With `mcp_only`, a permission request is granted for reading and for this program's tools
+/// and refused for agy's own shell and file edits, as Claude Code is limited to the tools.
+fn run_acp(prog: &Path, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool) -> Result<RunOutput, String> {
+    use std::io::{BufRead, Write};
+    let t0 = Instant::now();
+    let mut cmd = Command::new(prog);
+    cmd.arg("acp").arg("--add-dir").arg(job.project).args(&cfg.args);
+    cmd.current_dir(job.workdir).env("PATH", child_path(prog)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = cmd.spawn().map_err(|e| format!("cannot start {} acp: {e}", prog.display()))?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let (tx, rx) = std::sync::mpsc::channel::<Value>();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
+                if tx.send(v).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = Kill(child);
+    let limit = Duration::from_secs(cfg.timeout_min.max(1) * 60);
+    let mcp_name = job.mcp.as_ref().map(|m| m.name.clone()).unwrap_or_default();
+    let mut next_id = 0u64;
+    let mut text = String::new();
+    fn send(stdin: &mut std::process::ChildStdin, v: Value) -> Result<(), String> {
+        writeln!(stdin, "{v}").and_then(|_| stdin.flush()).map_err(|e| format!("agy acp closed: {e}"))
+    }
+    // sends a request and waits for its answer, answering the agent's own requests and
+    // gathering the reply text meanwhile
+    let mut call = |stdin: &mut std::process::ChildStdin, method: &str, params: Value, text: &mut String, session: &str| -> Result<Value, String> {
+        next_id += 1;
+        let id = next_id;
+        send(stdin, json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                if !session.is_empty() {
+                    let _ = send(stdin, json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}}));
+                }
+                return Err("cancelled".into());
+            }
+            if t0.elapsed() > limit {
+                return Err(format!("agy timed out after {} min", cfg.timeout_min));
+            }
+            let m = match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(m) => m,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => return Err(format!("agy acp ended during {method}")),
+            };
+            match (m.get("method").and_then(|x| x.as_str()), m.get("id")) {
+                (Some("session/update"), None) => {
+                    let u = &m["params"]["update"];
+                    if u["sessionUpdate"] == "agent_message_chunk" {
+                        if let Some(t) = u["content"]["text"].as_str() {
+                            text.push_str(t);
+                        }
+                    }
+                }
+                (Some("session/request_permission"), Some(rid)) => {
+                    let p = &m["params"];
+                    let kind = p["toolCall"]["kind"].as_str().unwrap_or("other");
+                    let title = p["toolCall"]["title"].as_str().unwrap_or("").to_ascii_lowercase();
+                    let ours = !mcp_name.is_empty() && title.contains(&mcp_name.to_ascii_lowercase());
+                    let allow = !job.mcp_only || ours || matches!(kind, "read" | "search" | "think" | "fetch");
+                    let opts = p["options"].as_array().cloned().unwrap_or_default();
+                    let want = if allow { "allow" } else { "reject" };
+                    let pick = opts.iter().find(|o| o["kind"].as_str().is_some_and(|k| k.starts_with(want))).or(if allow { opts.first() } else { None });
+                    let outcome = match pick.and_then(|o| o["optionId"].as_str()) {
+                        Some(oid) => json!({"outcome": "selected", "optionId": oid}),
+                        None => json!({"outcome": "cancelled"}),
+                    };
+                    send(stdin, json!({"jsonrpc": "2.0", "id": rid, "result": {"outcome": outcome}}))?;
+                }
+                (Some(other), Some(rid)) => {
+                    // no file system or terminal on the client side: the agent uses its tools
+                    send(stdin, json!({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": format!("{other} is not offered by this client")}}))?;
+                }
+                (None, Some(rid)) if rid.as_u64() == Some(id) => {
+                    if let Some(e) = m.get("error") {
+                        return Err(format!("agy {method}: {}", e.get("message").and_then(|x| x.as_str()).unwrap_or(&e.to_string())));
+                    }
+                    return Ok(m.get("result").cloned().unwrap_or(Value::Null));
+                }
+                _ => {}
+            }
+        }
+    };
+    let _ = &mut child;
+    call(&mut stdin, "initialize", json!({"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false}}), &mut text, "")?;
+    let servers: Vec<Value> = job
+        .mcp
+        .iter()
+        .map(|m| {
+            let env: Vec<Value> = mcp_env(false).as_object().into_iter().flatten().map(|(k, v)| json!({"name": k, "value": v.as_str().unwrap_or_default()})).collect();
+            json!({"name": m.name, "command": m.command, "args": m.args, "env": env})
+        })
+        .collect();
+    let new = call(&mut stdin, "session/new", json!({"cwd": job.workdir, "mcpServers": servers}), &mut text, "")?;
+    let session = new["sessionId"].as_str().ok_or("agy started no session")?.to_string();
+    if !job.model.is_empty() && new["models"]["currentModelId"].as_str() != Some(job.model) {
+        let known: Vec<String> = new["models"]["availableModels"].as_array().map(|a| a.iter().filter_map(|m| m["modelId"].as_str().map(String::from)).collect()).unwrap_or_default();
+        if !known.is_empty() && !known.iter().any(|k| k == job.model) {
+            return Err(format!("agy has no model '{}'; it offers: {}", job.model, known.join(", ")));
+        }
+        call(&mut stdin, "session/set_model", json!({"sessionId": session, "modelId": job.model}), &mut text, &session)?;
+    }
+    let done = call(&mut stdin, "session/prompt", json!({"sessionId": session, "prompt": [{"type": "text", "text": job.prompt}]}), &mut text, &session)?;
+    let u = |k: &str| done["usage"][k].as_u64().unwrap_or(0);
+    let stop = done["stopReason"].as_str().unwrap_or("");
+    Ok(RunOutput { text: text.trim().to_string(), ok: matches!(stop, "end_turn" | "max_tokens" | ""), seconds: t0.elapsed().as_secs_f64(), input_tokens: u("inputTokens"), output_tokens: u("outputTokens"), cached_tokens: u("cachedReadTokens") })
 }
 
 fn tail(s: &str, n: usize) -> String {

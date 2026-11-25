@@ -26,8 +26,8 @@ pub(super) fn info() -> ModuleInfo {
                 ("t_top", prop("number", "stem thickness at the top (m)", Some(json!(0.3)))),
                 ("t_bot", prop("number", "stem thickness at the base (m)", Some(json!(0.5)))),
                 ("t_base", prop("number", "base slab thickness (m)", Some(json!(0.6)))),
-                ("toe", prop("number", "toe length, front of base to front of stem (m)", None)),
-                ("heel", prop("number", "heel length, back of stem to end of base (m)", None)),
+                ("toe", prop("number", "toe length, front of base to front of stem (m); omit toe and heel to size the base", None)),
+                ("heel", prop("number", "heel length, back of stem to end of base (m); omit toe and heel to size the base", None)),
                 ("gamma_c", prop("number", "unit weight of concrete (kN/m3)", Some(json!(24)))),
                 ("gamma1", prop("number", "backfill unit weight (kN/m3)", Some(json!(18)))),
                 ("phi1", prop("number", "backfill friction angle (deg)", Some(json!(30)))),
@@ -47,12 +47,76 @@ pub(super) fn info() -> ModuleInfo {
                 ("FS_sl_min", prop("number", "required FS against sliding", Some(json!(1.5)))),
                 ("FS_bc_min", prop("number", "required FS against bearing failure", Some(json!(3.0)))),
             ],
-            &["H", "toe", "heel", "D"],
+            &["H", "D"],
         ),
     }
 }
 
+/// Checks a given wall, or sizes the base when toe and heel are left out: the narrowest base
+/// on a 0.05 m grid that passes every check, with toe lengths from 10 % to 45 % of the base
+/// tried at each width, and a note that the next narrower base fails them all.
 pub(super) fn run(a: &Value) -> Result<Design, String> {
+    let given = |k: &str| a.get(k).is_some_and(|v| !v.is_null());
+    if given("toe") && given("heel") {
+        return check(a);
+    }
+    let h = positive("H", num(a, "H", None)?)?;
+    let t_bot = positive("t_bot", num(a, "t_bot", Some(0.5))?)?;
+    let toe_fixed = if given("toe") { Some(non_negative("toe", num(a, "toe", None)?)?) } else { None };
+    let heel_fixed = if given("heel") { Some(non_negative("heel", num(a, "heel", None)?)?) } else { None };
+    let grid = |x: f64| (x / 0.05).round() * 0.05;
+    let with = |toe: f64, heel: f64| {
+        let mut b = a.clone();
+        b["toe"] = serde_json::json!(toe);
+        b["heel"] = serde_json::json!(heel);
+        b
+    };
+    // the toe lengths tried at one base width
+    let options = |bw: f64| -> Vec<(f64, f64)> {
+        let mut v = vec![];
+        match (toe_fixed, heel_fixed) {
+            (Some(t), _) => v.push((t, bw - t_bot - t)),
+            (_, Some(hl)) => v.push((bw - t_bot - hl, hl)),
+            _ => {
+                for k in 2..=9 {
+                    let t = grid(bw * 0.05 * k as f64);
+                    v.push((t, bw - t_bot - t));
+                }
+            }
+        }
+        v.into_iter().filter(|(t, hl)| *t >= 0.0 && *hl >= 0.0).map(|(t, hl)| (grid(t), grid(hl))).collect()
+    };
+    let passes = |bw: f64| -> Option<(f64, f64)> {
+        options(bw).into_iter().find(|(t, hl)| check(&with(*t, *hl)).map(|d| d.pass).unwrap_or(false))
+    };
+    let mut bw = grid((0.3 * h).max(t_bot + 0.1));
+    let limit = 3.0 * h + 2.0;
+    let found = loop {
+        if bw > limit {
+            break None;
+        }
+        if let Some(tw) = passes(bw) {
+            break Some((bw, tw));
+        }
+        bw = grid(bw + 0.05);
+    };
+    let Some((bw, (toe, heel))) = found else {
+        return Err(format!("no base up to B = {limit:.2} m passes every check: thicken the base, add a shear key or passive resistance, or review the soil data"));
+    };
+    let mut d = check(&with(toe, heel))?;
+    let narrower = grid(bw - 0.05);
+    d.sheet.notes.insert(
+        0,
+        format!(
+            "Base sized: B = {bw:.2} m (toe {toe:.2} m, heel {heel:.2} m) is the narrowest base on a 0.05 m grid that passes every check; B = {narrower:.2} m fails them for every toe length tried{}.",
+            if toe_fixed.is_none() && heel_fixed.is_none() { " (10 % to 45 % of B)" } else { "" }
+        ),
+    );
+    d.summary = format!("Sized base B = {bw:.2} m (toe {toe:.2}, heel {heel:.2}); B = {narrower:.2} m fails. {}", d.summary);
+    Ok(d)
+}
+
+fn check(a: &Value) -> Result<Design, String> {
     let h = positive("H", num(a, "H", None)?)?;
     let t_top = positive("t_top", num(a, "t_top", Some(0.3))?)?;
     let t_bot = positive("t_bot", num(a, "t_bot", Some(0.5))?)?;
@@ -78,6 +142,14 @@ pub(super) fn run(a: &Value) -> Result<Design, String> {
     let d = non_negative("D", num(a, "D", None)?)?;
     let k1 = non_negative("k1", num(a, "k1", Some(2.0 / 3.0))?)?;
     let k2 = non_negative("k2", num(a, "k2", Some(2.0 / 3.0))?)?;
+    // interface factors outside the usual range change the sliding check a lot: say so
+    let mut cautions: Vec<String> = vec![];
+    if k1 > 2.0 / 3.0 + 1e-3 {
+        cautions.push(format!("base friction delta = {k1:.2} phi2 is above Das's 1/2 to 2/3 phi2; EN 1997-1 6.5.3(10) allows delta = phi'cv,d for a cast-in-situ base, so state which basis is used and that phi2 is the critical-state angle"));
+    }
+    if c2 > 0.0 && k2 < 1e-6 {
+        cautions.push(format!("c2 = {c2} kPa is given but k2 = 0, so base adhesion is ignored in sliding; this is conservative (common for long-term drained sliding) and can make the base much wider than Das's k2 = 1/2 to 2/3 would; state the choice"));
+    }
     let passive = flag(a, "passive", false)?;
     let toe_soil = flag(a, "toe_soil", false)?;
     let water = flag(a, "water_table", false)?;
@@ -266,7 +338,10 @@ pub(super) fn run(a: &Value) -> Result<Design, String> {
     }
     sb.note("Structural design of the stem, toe and heel (bending and shear) and global (deep-seated) stability are not checked.");
 
-    let sheet = sb.finish()?;
+    let mut sheet = sb.finish()?;
+    for c in &cautions {
+        sheet.notes.push(format!("Caution: {c}."));
+    }
     let v = |k: &str| sheet.value(k).unwrap_or(f64::NAN);
     let summary = format!(
         "Cantilever wall H = {} m (H' = {} m), base B = {} m (toe {} m, heel {} m). Pa = {} kN/m; FS overturning = {}, sliding = {}, \
@@ -285,7 +360,7 @@ pub(super) fn run(a: &Value) -> Result<Design, String> {
         fmt4(v("q_max")),
         fmt4(v("q_min")),
         if sheet.all_pass { "All checks pass" } else { "One or more checks FAIL" },
-        check_summary(&sheet)
+        check_summary(&sheet) + &cautions.iter().map(|c| format!(" CAUTION: {c}.")).collect::<String>()
     );
     let drawing = wall_drawing(h, t_top, t_bot, t_b, toe, heel, d, q, z_wt, v("K_a"), g1, sheet.value("gamma_sat").unwrap_or(g1), v("P_a"));
     Ok(Design { module: "retaining_wall_cantilever".into(), pass: sheet.all_pass, sheet, drawing: Some(drawing), summary })

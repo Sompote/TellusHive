@@ -105,7 +105,8 @@ pub fn slug(s: &str) -> String {
             out.push('_');
         }
     }
-    let out = out.trim_matches('_').to_string();
+    // a leading dot would make a hidden folder (".", ".." and ".x" names)
+    let out = out.trim_start_matches(['.', '_']).trim_end_matches('_').to_string();
     if out.is_empty() {
         "untitled".into()
     } else {

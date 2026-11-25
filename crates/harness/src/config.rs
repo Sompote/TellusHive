@@ -86,6 +86,42 @@ pub fn write_json<T: Serialize>(p: &Path, v: &T, private: bool) -> Result<(), St
     std::fs::rename(&tmp, p).map_err(|e| e.to_string())
 }
 
+/// The MCP server of the running window: other agents (Claude, ChatGPT, Grok, agy …) list the
+/// bots and teams and send them messages. It listens on this computer only, with a token.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BridgeSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Bearer token the client must send; made once when empty.
+    pub token: String,
+}
+
+impl Default for BridgeSettings {
+    fn default() -> Self {
+        BridgeSettings { enabled: true, port: 8795, token: String::new() }
+    }
+}
+
+impl BridgeSettings {
+    pub fn url(&self) -> String {
+        format!("http://127.0.0.1:{}/mcp", self.port)
+    }
+    /// A fresh random-looking token (time, process and address mixed through SipHash).
+    pub fn new_token() -> String {
+        use std::hash::{BuildHasher, Hasher};
+        let mut out = String::new();
+        for k in 0..2u64 {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+            h.write_u32(std::process::id());
+            h.write_u64(k);
+            out.push_str(&format!("{:016x}", h.finish()));
+        }
+        out
+    }
+}
+
 /// An external coding agent the coordinator can hand work to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -120,6 +156,10 @@ pub struct Settings {
     pub vision_model: String,
     pub embedder: th_kb::EmbedderConfig,
     pub claude_code: ExternalAgent,
+    /// Google Antigravity's CLI (`agy`), as an agent's model.
+    pub agy: ExternalAgent,
+    /// The MCP server the window offers to other agents (talk to the bots and teams).
+    pub bridge: BridgeSettings,
     pub codex: ExternalAgent,
     /// MCP servers ("plugins").
     pub plugins: Vec<ServerConfig>,
@@ -190,6 +230,8 @@ impl Default for Settings {
             vision_model: "deepseek/deepseek-v4.1-flash-1017".into(),
             embedder: th_kb::EmbedderConfig::default(),
             claude_code: claude,
+            agy: ExternalAgent::default(),
+            bridge: BridgeSettings::default(),
             codex,
             plugins: default_plugins(),
             python: String::new(),

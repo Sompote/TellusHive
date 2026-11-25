@@ -6,15 +6,19 @@
 //! tellushive                               the window
 //! tellushive --mcp [--project DIR]         this program's tools as an MCP server (stdio)
 //! tellushive run --project DIR "message"   one coordinator turn in the terminal
+//! tellushive serve [--port 8796]           the bots for the iPhone app (HTTP, no window)
 //! ```
 
 mod app;
 mod bots;
+mod bridge;
 mod chat;
 mod chrome;
 mod icons;
 mod markdown;
 mod plugins;
+mod qa;
+mod server;
 mod settings_view;
 mod standards;
 mod team;
@@ -32,7 +36,7 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     #[cfg(windows)]
-    if matches!(args.get(1).map(String::as_str), Some("run" | "plugins" | "--help" | "-h")) {
+    if matches!(args.get(1).map(String::as_str), Some("run" | "serve" | "plugins" | "--help" | "-h")) {
         // SAFETY: plain Win32 call with a constant argument
         unsafe {
             windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
@@ -59,6 +63,9 @@ fn main() {
     }
     if args.get(1).map(String::as_str) == Some("run") {
         std::process::exit(run_headless(&args));
+    }
+    if args.get(1).map(String::as_str) == Some("serve") {
+        std::process::exit(server::run(&args));
     }
     if args.get(1).map(String::as_str) == Some("plugins") {
         std::process::exit(dump_plugins(&args));

@@ -16,8 +16,8 @@ use crate::theme::medium_font;
 
 const SECTIONS: [(Icon, &str, &str); 5] = [
     (Icon::Chat, "Models", "Which language model each agent uses, and the API keys"),
-    (Icon::Library, "Standards search", "How the standards library is indexed"),
-    (Icon::Edit, "Claude Code & Codex", "Coding agents the coordinator can hand work to"),
+    (Icon::Library, "Standards library", "The pool of standards every project and bot chooses from: import, re-index and office rules, and how the library is searched"),
+    (Icon::Edit, "Coding agents & MCP", "Claude Code, Codex and Antigravity, and the MCP server for other agents"),
     (Icon::Book, "Skills", "The skills agents can be equipped with: add, write or remove them"),
     (Icon::Settings, "General", "Projects folder and appearance"),
 ];
@@ -29,6 +29,7 @@ pub struct SettingsView {
     models_rx: Option<Receiver<(String, Result<Vec<String>, String>)>>,
     claude_args: Option<String>,
     codex_args: Option<String>,
+    agy_args: Option<String>,
     skills: Option<Vec<th_harness::skills::Skill>>,
     skills_changed: bool,
     skill_msg: String,
@@ -74,8 +75,14 @@ impl SettingsView {
         ui.label(RichText::new(format!("Saved in {}", Settings::path().display())).size(11.0).color(t.text_faint));
     }
 
-    /// Returns true when the settings changed.
-    pub fn ui(&mut self, ui: &mut egui::Ui, s: &mut Settings) -> bool {
+    /// Opens the Standards library section.
+    pub fn show_library(&mut self) {
+        self.section = 1;
+    }
+
+    /// Returns true when the settings changed. `library` draws the standards library (it lives
+    /// in the app, beside the project page that switches standards on).
+    pub fn ui(&mut self, ui: &mut egui::Ui, s: &mut Settings, library: &mut dyn FnMut(&mut egui::Ui, &Settings)) -> bool {
         let t = tokens(ui);
         let before = s.clone();
         if let Some(rx) = &self.models_rx {
@@ -91,7 +98,10 @@ impl SettingsView {
             ui.label(RichText::new(about).color(t.text_dim));
             match self.section {
                 0 => self.models_ui(ui, s),
-                1 => embed_ui(ui, s),
+                1 => {
+                    library(ui, s);
+                    embed_ui(ui, s);
+                }
                 2 => self.external_ui(ui, s),
                 3 => self.skills_ui(ui, s),
                 _ => general_ui(ui, s),
@@ -218,17 +228,28 @@ impl SettingsView {
     }
 
     fn external_ui(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
-        for which in 0..2 {
-            let found = find_program(if which == 0 { "claude" } else { "codex" }, if which == 0 { &s.claude_code.path } else { &s.codex.path });
-            let cfg = if which == 0 { &mut s.claude_code } else { &mut s.codex };
-            let args_slot = if which == 0 { &mut self.claude_args } else { &mut self.codex_args };
+        for which in 0..3 {
+            let (program, title) = [("claude", "Claude Code"), ("codex", "Codex"), ("agy", "Antigravity (agy)")][which];
+            let found = find_program(program, [&s.claude_code.path, &s.codex.path, &s.agy.path][which]);
+            let cfg = match which {
+                0 => &mut s.claude_code,
+                1 => &mut s.codex,
+                _ => &mut s.agy,
+            };
+            let args_slot = match which {
+                0 => &mut self.claude_args,
+                1 => &mut self.codex_args,
+                _ => &mut self.agy_args,
+            };
             let ctxt = match &found {
                 Some(p) => format!("found: {}", p.display()),
                 None => "not found".into(),
             };
-            group(ui, if which == 0 { "Claude Code" } else { "Codex" }, &ctxt, |ui| {
-                chrome::switch_row(ui, "Enabled (as a worker tool and as an agent's model)", &mut cfg.enabled);
-                chrome::switch_row(ui, if which == 0 { "Use my Claude subscription (ignore ANTHROPIC_API_KEY)" } else { "Use my ChatGPT subscription (ignore OPENAI_API_KEY)" }, &mut cfg.subscription);
+            group(ui, title, &ctxt, |ui| {
+                chrome::switch_row(ui, if which == 2 { "Enabled (as an agent's model)" } else { "Enabled (as a worker tool and as an agent's model)" }, &mut cfg.enabled);
+                if which < 2 {
+                    chrome::switch_row(ui, if which == 0 { "Use my Claude subscription (ignore ANTHROPIC_API_KEY)" } else { "Use my ChatGPT subscription (ignore OPENAI_API_KEY)" }, &mut cfg.subscription);
+                }
                 chrome::field(ui, "Program", &mut cfg.path).on_hover_text("Empty = search PATH and the usual install folders");
                 let txt = args_slot.get_or_insert_with(|| cfg.args.join(" "));
                 if chrome::field(ui, "Arguments", txt).changed() {
@@ -238,13 +259,39 @@ impl SettingsView {
                     chrome::row_label(ui, "Time limit");
                     ui.add_sized([100.0, 28.0], egui::DragValue::new(&mut cfg.timeout_min).range(1..=600).suffix(" min"));
                 });
-                chrome::hint(ui, if which == 0 {
-                    "Runs `claude -p` in the project's work folder with this program's tools as an MCP server. The default permission mode acceptEdits lets it edit files there but not run shell commands, unless you add e.g. --allowedTools Bash."
-                } else {
-                    "Runs `codex exec` in the project's work folder (workspace-write sandbox) with this program's tools as an MCP server."
+                chrome::hint(ui, match which {
+                    0 => "Runs `claude -p` in the project's work folder with this program's tools as an MCP server. The default permission mode acceptEdits lets it edit files there but not run shell commands, unless you add e.g. --allowedTools Bash.",
+                    1 => "Runs `codex exec` in the project's work folder (workspace-write sandbox) with this program's tools as an MCP server.",
+                    _ => "Runs `agy acp` (Agent Client Protocol) on your Google login, with this program's tools handed to each session; your own agy set-up is not changed. It may read and use these tools; its own shell and file edits are refused, so it runs Python and saves files through the tools. Pick provider 'antigravity' for an agent or bot, and a model from List models.",
                 });
             });
         }
+        let b = &mut s.bridge;
+        group(ui, "MCP server for other agents", &b.url(), |ui| {
+            chrome::switch_row(ui, "Let other agents talk to the bots and teams while TellusHive runs", &mut b.enabled);
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "Port");
+                ui.add_sized([100.0, 28.0], egui::DragValue::new(&mut b.port).range(1024..=65535));
+            });
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "Token");
+                ui.add_sized([ui.available_width() - 110.0, 28.0], egui::TextEdit::singleline(&mut b.token).password(true).vertical_align(egui::Align::Center));
+                if ui.button("New token").on_hover_text("Clients with the old token are turned away after the restart").clicked() {
+                    b.token = th_harness::config::BridgeSettings::new_token();
+                }
+            });
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "");
+                if ui.button("Copy client config").on_hover_text("MCP configuration with the URL and the token, for Claude Code, Claude Desktop, Cursor and others").clicked() {
+                    let cfg = serde_json::json!({"mcpServers": {"tellushive": {"type": "http", "url": b.url(), "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
+                    ui.ctx().copy_text(serde_json::to_string_pretty(&cfg).unwrap_or_default());
+                }
+                if ui.button("Copy token").clicked() {
+                    ui.ctx().copy_text(b.token.clone());
+                }
+            });
+            chrome::hint(ui, "Tools offered: list_bots, list_teams, ask_bot and ask_team. A message lands in that bot's or team's chat in this window, so you see the work; the reply goes back to the agent when the run ends. The server listens on this computer only (127.0.0.1). Agents running here (Claude Code, Codex, agy, Claude Desktop) connect directly; ChatGPT and Grok run in the cloud and need a public HTTPS tunnel to this port. Changes apply when TellusHive restarts.");
+        });
     }
 }
 
@@ -275,7 +322,7 @@ fn embed_ui(ui: &mut egui::Ui, s: &mut Settings) {
                 chrome::hint(ui, &format!("Currently a custom embedding API ({model} at {base_url}). Choose one of the two options above to replace it."));
             }
         }
-        chrome::hint(ui, "Standards imported from now on use this setting. To change those already in the library, use Re-index on the Standards page.");
+        chrome::hint(ui, "Standards imported from now on use this setting. To change those already in the library, use Re-index above.");
     });
 }
 

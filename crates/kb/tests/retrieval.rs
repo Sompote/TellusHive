@@ -141,7 +141,11 @@ fn filter_by_standard() {
     assert!(h.iter().all(|x| x.standard_id == "syn-geo-1"));
     let h = lib.search("22.5.5.1", &only_geo, 5).unwrap();
     assert!(h.iter().all(|x| x.standard_code == "SYN-GEO 1"));
-    assert!(lib.search("x", &["missing-std".to_string()], 5).is_err());
+    // a project may still name a standard deleted from the library: it is skipped, and the
+    // standards that are there are still searched
+    assert!(lib.search("x", &["missing-std".to_string()], 5).unwrap().is_empty());
+    let h = lib.search("minimum shear reinforcement area", &["missing-std".to_string(), "syn-geo-1".to_string()], 10).unwrap();
+    assert!(!h.is_empty() && h.iter().all(|x| x.standard_id == "syn-geo-1"));
     std::fs::remove_dir_all(root).ok();
 }
 

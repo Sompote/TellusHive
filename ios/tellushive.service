@@ -1,0 +1,18 @@
+# systemd unit for `tellushive serve` on a Linux cloud machine.
+# Copy to /etc/systemd/system/tellushive.service, set User and the binary path, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tellushive
+[Unit]
+Description=TellusHive server for the iPhone app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tellus
+ExecStart=/home/tellus/tellushive/target/release/tellushive serve --port 8796
+Restart=on-failure
+RestartSec=5
+# the provider API keys can also come from the environment instead of settings.json
+# Environment=ANTHROPIC_API_KEY=...
+
+[Install]
+WantedBy=multi-user.target

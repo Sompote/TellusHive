@@ -119,6 +119,13 @@ impl Plugins {
         if !cfg.enabled {
             return Err(format!("plugin '{name}' is switched off"));
         }
+        // the program runs in the project folder, so the paths agents give it (models/…,
+        // reports/…) are the project's; a working folder set in its settings is kept
+        let mut cfg = cfg.clone();
+        if let Some(dir) = project.filter(|_| cfg.cwd.trim().is_empty() && !cfg.is_http()) {
+            cfg.cwd = dir.display().to_string();
+        }
+        let cfg = &cfg;
         let (Some(s), Some(dir)) = (live, project) else { return self.connect(cfg) };
         let c = self.connect(&live::bind(cfg, dir))?;
         if let Ok(mut b) = self.bound.lock() {
@@ -505,6 +512,26 @@ impl Engine {
         adopt_legacy_chat(&self.domain.project().dir, &team);
         if let Ok(mut k) = self.chat_key.write() {
             *k = team_chat_key(&team);
+        }
+    }
+
+    /// Makes the engine continue the bot's own conversation in its project. A bot working in
+    /// its own folder moves the conversation it kept there before (chat.json, sessions/current)
+    /// to its own names once.
+    pub fn use_bot_chat(&self, bot: &crate::bots::Bot) {
+        let dir = self.domain.project().dir;
+        if dir.starts_with(bot.folder()) {
+            let file = dir.join(bot.chat_file());
+            if !file.exists() && dir.join("chat.json").is_file() {
+                let _ = std::fs::rename(dir.join("chat.json"), &file);
+            }
+            let key = dir.join("sessions").join(bot.chat_key());
+            if !key.exists() && dir.join("sessions/current").is_file() {
+                let _ = std::fs::rename(dir.join("sessions/current"), &key);
+            }
+        }
+        if let Ok(mut k) = self.chat_key.write() {
+            *k = bot.chat_key();
         }
     }
 

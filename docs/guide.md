@@ -6,6 +6,11 @@ agent harness see [architecture.md](architecture.md).
 
 ## Workspaces in the window
 
+- **Bots** is a messenger: the bots in a rail on the left, the chat with the chosen bot in the
+  middle, and its profile (Activity, Library, Setup) behind the name chip at the top right. A
+  bot works alone or calls saved teams and other bots, and **New conversation** in the chat
+  header starts a fresh conversation. Its picture, character, model, standards and plugins are
+  set in **Setup**.
 - **Design** has the project explorer on the left (description, notes for every agent, chosen
   standards, team, artifacts), the chat in the middle and the artifact viewer on the right. The
   viewer shows calculation sheets with PASS/FAIL, drawings, reports and pictures, and files can
@@ -14,12 +19,17 @@ agent harness see [architecture.md](architecture.md).
 - **Team** shows the agents as nodes on a canvas. Each agent has its own role, instructions,
   provider and model, built-in tools, skills, plugins, delegation targets, and a switch for
   whether it may use Claude Code or Codex. Teams are saved as JSON in the data folder.
-- **Standards** imports standards (PDF, txt, md) into the vector library and sets which ones
-  the project follows. You can add office rules as searchable notes and test a search there.
+- **Project › Standards** switches on the standards of the library that the project follows,
+  and has a search to try them the way the agents do.
+- **Settings › Standards library** is the library itself, one pool for every project and bot.
+  Standards (PDF, txt, md) are imported, re-indexed, browsed and deleted there, office rules
+  are added to a chosen standard as searchable notes, and the embedding setting decides how
+  the library is searched.
 - **Plugins** manages MCP servers. Tellus and Tellus3D are added automatically when their
   programs are found, and any stdio program or HTTP endpoint can be added and connected later.
-- **Settings** holds the providers and keys, the default and vision models, the embedding
-  model, Claude Code and Codex, the skill folders, the projects folder and the theme.
+- **Settings** holds the providers and keys, the default and vision models, the standards
+  library and its embedding model, Claude Code, Codex and Antigravity, the MCP server for other
+  agents, the skill folders, the projects folder and the theme.
 
 ## Speed: thinking and revision rounds
 

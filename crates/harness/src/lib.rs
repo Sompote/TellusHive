@@ -83,7 +83,9 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
     let ctx = engine.hive.ctx.clone();
     let store = ctx.expect::<SessionStore>(keys::SESSIONS)?;
     store.set_root(Some(project.dir.join("sessions")));
-    let preset = engine.domain.preset(&spec)?;
+    // serving tools never calls the agent's model, so a provider without a key (or a bot's
+    // own API this process cannot see) must not stop the coding agent from getting its tools
+    let preset = engine.domain.preset(&spec).or_else(|_| engine.domain.preset(&AgentSpec { provider: "claude-code".into(), model: String::new(), ..spec.clone() }))?;
     let sid = opt.session.clone().unwrap_or_else(|| store.new_id(&format!("{}-tools", spec.id)));
     let session = store.create(SessionMeta { id: sid, agent: spec.id.clone(), label: "tools served to Claude Code / Codex".into(), parent: opt.parent.clone(), depth: opt.depth })?;
     let agent = ctx.expect::<AgentRegistry>(keys::AGENTS)?.create_at(preset, session, opt.depth, opt.parent.clone(), Arc::new(AtomicBool::new(false)));

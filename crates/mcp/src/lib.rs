@@ -388,38 +388,122 @@ pub struct ServedTool {
     pub run: Box<dyn Fn(Value) -> Result<String, String> + Send + Sync>,
 }
 
+/// Answers one JSON-RPC message to the server; None for a notification.
+pub fn handle(name: &str, tools: &[ServedTool], v: &Value) -> Option<Value> {
+    let id = v.get("id").cloned()?;
+    let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let result = match method {
+        "initialize" => Ok(json!({"protocolVersion": v.pointer("/params/protocolVersion").cloned().unwrap_or(json!(PROTOCOL)),
+            "capabilities": {"tools": {}}, "serverInfo": {"name": name, "version": env!("CARGO_PKG_VERSION")}})),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools": tools.iter().map(|t| serde_json::to_value(&t.info).unwrap_or(Value::Null)).collect::<Vec<_>>()})),
+        "tools/call" => {
+            let tname = v.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("");
+            let args = v.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+            match tools.iter().find(|t| t.info.name == tname) {
+                Some(t) => match (t.run)(args) {
+                    Ok(text) => Ok(json!({"content": [{"type": "text", "text": text}]})),
+                    Err(e) => Ok(json!({"content": [{"type": "text", "text": e}], "isError": true})),
+                },
+                None => Err(format!("unknown tool {tname}")),
+            }
+        }
+        _ => Err(format!("method not found: {method}")),
+    };
+    Some(match result {
+        Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
+        Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": e}}),
+    })
+}
+
 /// Serves tools over stdio until stdin closes (newline-delimited JSON-RPC).
 pub fn serve_stdio(name: &str, tools: Vec<ServedTool>) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     for line in stdin.lock().lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue };
-        let Some(id) = v.get("id").cloned() else { continue };
-        let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
-        let result = match method {
-            "initialize" => Ok(json!({"protocolVersion": v.pointer("/params/protocolVersion").cloned().unwrap_or(json!(PROTOCOL)),
-                "capabilities": {"tools": {}}, "serverInfo": {"name": name, "version": env!("CARGO_PKG_VERSION")}})),
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools": tools.iter().map(|t| serde_json::to_value(&t.info).unwrap_or(Value::Null)).collect::<Vec<_>>()})),
-            "tools/call" => {
-                let tname = v.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("");
-                let args = v.pointer("/params/arguments").cloned().unwrap_or(json!({}));
-                match tools.iter().find(|t| t.info.name == tname) {
-                    Some(t) => match (t.run)(args) {
-                        Ok(text) => Ok(json!({"content": [{"type": "text", "text": text}]})),
-                        Err(e) => Ok(json!({"content": [{"type": "text", "text": e}], "isError": true})),
-                    },
-                    None => Err(format!("unknown tool {tname}")),
-                }
+        if let Some(reply) = handle(name, &tools, &v) {
+            if write_line(&mut out, &reply).is_err() {
+                break;
             }
-            _ => Err(format!("method not found: {method}")),
+        }
+    }
+}
+
+/// Serves tools over MCP's streamable HTTP transport (JSON replies, no event stream) at
+/// `http://<addr>/mcp`, one thread per connection, until the process ends. With a token,
+/// every request must carry `Authorization: Bearer <token>`. Returns once listening.
+pub fn serve_http(name: &str, addr: &str, token: Option<String>, tools: Vec<ServedTool>) -> Result<(), String> {
+    let listener = std::net::TcpListener::bind(addr).map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+    let shared = Arc::new((name.to_string(), token, tools));
+    std::thread::spawn(move || {
+        for conn in listener.incoming().flatten() {
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                let _ = http_connection(conn, &shared.0, shared.1.as_deref(), &shared.2);
+            });
+        }
+    });
+    Ok(())
+}
+
+fn http_connection(conn: std::net::TcpStream, name: &str, token: Option<&str>, tools: &[ServedTool]) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut reader = BufReader::new(conn.try_clone()?);
+    let mut out = conn;
+    // keep-alive: several requests on one connection
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        let mut parts = line.split_whitespace();
+        let (method, path) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
+        let mut headers: HashMap<String, String> = HashMap::new();
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
+                break;
+            }
+            if let Some((k, v)) = h.split_once(':') {
+                headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+            }
+        }
+        let len: usize = headers.get("content-length").and_then(|l| l.parse().ok()).unwrap_or(0);
+        let mut body = vec![0u8; len.min(16 << 20)];
+        reader.read_exact(&mut body)?;
+        let respond = |out: &mut std::net::TcpStream, status: &str, ctype: &str, body: &str| -> std::io::Result<()> {
+            write!(out, "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nMcp-Session-Id: tellushive\r\n\r\n{body}", body.len())?;
+            out.flush()
         };
-        let reply = match result {
-            Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-            Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": e}}),
+        if !path.trim_end_matches('/').ends_with("/mcp") {
+            respond(&mut out, "404 Not Found", "text/plain", "MCP is served at /mcp")?;
+            continue;
+        }
+        if let Some(t) = token {
+            let ok = headers.get("authorization").is_some_and(|a| a.strip_prefix("Bearer ").is_some_and(|g| g.trim() == t));
+            if !ok {
+                respond(&mut out, "401 Unauthorized", "text/plain", "missing or wrong bearer token")?;
+                continue;
+            }
+        }
+        if method != "POST" {
+            // no server-to-client event stream: requests get their answers in the reply
+            respond(&mut out, "405 Method Not Allowed", "text/plain", "POST JSON-RPC to /mcp")?;
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+            respond(&mut out, "400 Bad Request", "text/plain", "body is not JSON")?;
+            continue;
         };
-        if write_line(&mut out, &reply).is_err() {
-            break;
+        let replies: Vec<Value> = match &v {
+            Value::Array(batch) => batch.iter().filter_map(|m| handle(name, tools, m)).collect(),
+            m => handle(name, tools, m).into_iter().collect(),
+        };
+        match (v.is_array(), replies.len()) {
+            (_, 0) => respond(&mut out, "202 Accepted", "text/plain", "")?,
+            (false, _) => respond(&mut out, "200 OK", "application/json", &replies[0].to_string())?,
+            (true, _) => respond(&mut out, "200 OK", "application/json", &Value::Array(replies).to_string())?,
         }
     }
 }
@@ -461,6 +545,21 @@ done"#;
         assert_eq!(e, "cancelled");
         assert!(t0.elapsed() < Duration::from_secs(6), "took {:?}", t0.elapsed());
         assert!(!c.is_alive(), "a server that ignores the cancel notice is ended");
+    }
+
+    /// The HTTP server answers our own HTTP client, and turns away a request without the token.
+    #[test]
+    fn http_round_trip() {
+        let tools = vec![ServedTool { info: ToolInfo { name: "echo".into(), description: "e".into(), input_schema: json!({"type":"object"}) }, run: Box::new(|a| Ok(format!("pong {}", a["x"]))) }];
+        serve_http("th", "127.0.0.1:18795", Some("secret".into()), tools).unwrap();
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
+        let cfg = ServerConfig { name: "th".into(), url: "http://127.0.0.1:18795/mcp".into(), headers, enabled: true, ..Default::default() };
+        let c = Client::connect(&cfg).unwrap();
+        assert_eq!(c.tools[0].name, "echo");
+        assert_eq!(c.call("echo", json!({"x": 1})).unwrap().text, "pong 1");
+        let bad = ServerConfig { headers: HashMap::new(), ..cfg };
+        assert!(Client::connect(&bad).is_err());
     }
 
     /// Talks to a tiny shell-script server to prove the stdio framing.

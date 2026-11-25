@@ -166,8 +166,12 @@ impl Provider {
     pub fn codex() -> Self {
         Provider { name: "codex".into(), base_url: "cli://codex".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new(), kind: String::new() }
     }
+    /// Google Antigravity's CLI run as the model (`agy acp`), on the user's Google login.
+    pub fn antigravity() -> Self {
+        Provider { name: "antigravity".into(), base_url: "cli://agy".into(), api_key: String::new(), key_env: String::new(), default_model: String::new(), vision: false, thinking: String::new(), kind: String::new() }
+    }
     pub fn presets() -> Vec<Provider> {
-        vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai(), Provider::vllm(), Provider::vllm_vast(), Provider::claude_code(), Provider::codex()]
+        vec![Provider::deepseek(), Provider::openrouter(), Provider::ollama(), Provider::openai(), Provider::vllm(), Provider::vllm_vast(), Provider::claude_code(), Provider::codex(), Provider::antigravity()]
     }
 
     /// A coding-agent program run in place of an API (no key, no HTTP).
@@ -768,6 +772,9 @@ pub fn list_models(p: &Provider) -> Result<Vec<String>, String> {
     if p.base_url == "cli://claude-code" {
         return Ok(vec!["sonnet".into(), "opus".into(), "haiku".into()]);
     }
+    if p.base_url == "cli://agy" {
+        return agy_models();
+    }
     if p.is_cli() {
         return Ok(vec![]);
     }
@@ -775,6 +782,19 @@ pub fn list_models(p: &Provider) -> Result<Vec<String>, String> {
         return Err(format!("Set the Base URL of provider '{}' first.", p.name));
     }
     list_models_raw(p).map_err(|e| explain(p, None, e))
+}
+
+/// The models Antigravity's CLI offers (`agy models`: one "<id>\t<name>" per line).
+fn agy_models() -> Result<Vec<String>, String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let prog = [home.join(".local/bin/agy"), std::path::PathBuf::from("/opt/homebrew/bin/agy"), std::path::PathBuf::from("/usr/local/bin/agy")].into_iter().find(|p| p.is_file()).unwrap_or_else(|| "agy".into());
+    let out = std::process::Command::new(&prog).arg("models").output().map_err(|e| format!("cannot start agy: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let ids: Vec<String> = text.lines().filter_map(|l| l.split('\t').next()).map(str::trim).filter(|id| !id.is_empty() && !id.contains(' ') && !id.ends_with("...")).map(String::from).collect();
+    if ids.is_empty() {
+        return Err(format!("agy listed no models: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(ids)
 }
 
 fn list_models_raw(p: &Provider) -> Result<Vec<String>, String> {

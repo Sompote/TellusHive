@@ -1,6 +1,8 @@
-//! Step 2, Standards: the library (switch on what the project follows), importing a standard
-//! (PDF / text / Markdown) into the vector database, office rules as notes (step panel); a
-//! search to try and a browser of a standard's clauses (canvas).
+//! The standards library. It is one pool for the whole design office, kept under Settings ›
+//! Standards library (`manage`: importing a standard from PDF / text / Markdown into the vector
+//! database, deleting, re-indexing, office rules as notes). A project only switches on the
+//! standards it follows (`left`, the project's Standards step) and tries a search the way the
+//! agents do (`center`).
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -35,6 +37,11 @@ pub struct StandardsView {
     list: Vec<StandardMeta>,
     stale: bool,
     show_import: bool,
+    /// "Import or manage standards in Settings" was pressed on the project page.
+    pub open_settings: bool,
+    confirm_delete: Option<String>,
+    /// The standard an office rule is added to.
+    note_target: String,
 }
 
 impl Default for StandardsView {
@@ -54,6 +61,9 @@ impl Default for StandardsView {
             list: vec![],
             stale: true,
             show_import: false,
+            open_settings: false,
+            confirm_delete: None,
+            note_target: String::new(),
         }
     }
 }
@@ -63,54 +73,70 @@ impl StandardsView {
         self.stale = true;
     }
 
-    /// The step panel. Returns true when the project's chosen standards changed.
-    pub fn left(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>, chosen: &mut Vec<String>, embedder: &EmbedderConfig) -> bool {
-        let t = tokens(ui);
-        let mut changed = false;
+    /// Takes the import or re-index worker's messages.
+    fn poll(&mut self, ui: &egui::Ui) {
+        let Some(rx) = &self.import_rx else { return };
+        for m in rx.try_iter().collect::<Vec<_>>() {
+            match m {
+                ImportMsg::Progress(f, s) => self.progress = (f, s),
+                ImportMsg::Done(r) => {
+                    self.status = match r {
+                        Ok(m) => {
+                            self.show_import = false;
+                            format!("Imported {} ({} clauses and pieces). Switch it on for a project under Project › Standards, or for a bot in its Setup.", m.code, m.chunks)
+                        }
+                        Err(e) => format!("Import failed: {e}"),
+                    };
+                    self.import_rx = None;
+                    self.files.clear();
+                    self.stale = true;
+                }
+                ImportMsg::Reindexed(r) => {
+                    self.status = match r {
+                        Ok(n) => format!("Re-indexed {n} standard(s) with the current embedding setting."),
+                        Err(e) => format!("Re-indexing failed: {e}"),
+                    };
+                    self.import_rx = None;
+                    self.stale = true;
+                }
+            }
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
+    fn list_of(&mut self, lib: &Arc<Library>) {
         if self.stale {
             self.list = lib.list();
             self.stale = false;
         }
-        if let Some(rx) = &self.import_rx {
-            for m in rx.try_iter().collect::<Vec<_>>() {
-                match m {
-                    ImportMsg::Progress(f, s) => self.progress = (f, s),
-                    ImportMsg::Done(r) => {
-                        self.status = match r {
-                            Ok(m) => {
-                                if !chosen.contains(&m.id) {
-                                    chosen.push(m.id.clone());
-                                    changed = true;
-                                }
-                                self.show_import = false;
-                                format!("Imported {} ({} clauses and pieces); it is switched on for this project.", m.code, m.chunks)
-                            }
-                            Err(e) => format!("Import failed: {e}"),
-                        };
-                        self.import_rx = None;
-                        self.files.clear();
-                        self.stale = true;
-                    }
-                    ImportMsg::Reindexed(r) => {
-                        self.status = match r {
-                            Ok(n) => format!("Re-indexed {n} standard(s) with the current embedding setting."),
-                            Err(e) => format!("Re-indexing failed: {e}"),
-                        };
-                        self.import_rx = None;
-                        self.stale = true;
-                    }
-                }
-            }
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-        }
+    }
 
-        chrome::explorer(ui, "Library", &format!("{} standards", self.list.len()), |ui| {
+    /// One standard's name and how it is indexed, kept clear of the buttons on its right.
+    fn describe(ui: &mut egui::Ui, m: &StandardMeta, room: f32) {
+        let t = tokens(ui);
+        let how = if m.embedder.starts_with("hashed") { "simple search".to_string() } else { m.embedder.trim_start_matches("api:").split('@').next().unwrap_or(&m.embedder).to_string() };
+        let name = if m.name.trim().is_empty() { String::new() } else { format!("{} · ", m.name.trim()) };
+        let line = format!("{name}{} · {} pieces · {how}", m.discipline, m.chunks);
+        ui.vertical(|ui| {
+            ui.set_max_width(room);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.label(RichText::new(chrome::fit_text(ui, &m.code, &medium_font(13.0), room)).font(medium_font(13.0))).on_hover_text(&m.code);
+            ui.label(RichText::new(chrome::fit_text(ui, &line, &egui::FontId::proportional(11.5), room)).size(11.5).color(t.text_dim)).on_hover_text(&line);
+        });
+    }
+
+    /// The project's step panel: which standards of the library the project follows.
+    /// Returns true when the project's chosen standards changed.
+    pub fn left(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>, chosen: &mut Vec<String>) -> bool {
+        let mut changed = false;
+        self.poll(ui);
+        self.list_of(lib);
+        chrome::explorer(ui, "Standards this project follows", &format!("{} of {}", self.list.iter().filter(|m| chosen.contains(&m.id)).count(), self.list.len()), |ui| {
             if self.list.is_empty() {
                 ui.add_space(4.0);
-                chrome::hint(ui, "The library is empty. Import the standards you design to (your own licensed copies); agents cite only what is here.");
+                chrome::hint(ui, "The standards library is empty. Import the standards you design to under Settings › Standards library; every project and bot then chooses from it.");
                 ui.add_space(4.0);
             }
-            let mut delete = None;
             for m in &self.list {
                 ui.horizontal(|ui| {
                     ui.set_min_height(44.0);
@@ -123,21 +149,8 @@ impl StandardsView {
                         }
                         changed = true;
                     }
-                    // the text keeps clear of Browse and ×, and says how the standard is indexed
-                    let room = (ui.available_width() - 130.0).max(60.0);
-                    let how = if m.embedder.starts_with("hashed") { "simple search".to_string() } else { m.embedder.trim_start_matches("api:").split('@').next().unwrap_or(&m.embedder).to_string() };
-                    let name = if m.name.trim().is_empty() { String::new() } else { format!("{} · ", m.name.trim()) };
-                    let line = format!("{name}{} · {} pieces · {how}", m.discipline, m.chunks);
-                    ui.vertical(|ui| {
-                        ui.set_max_width(room);
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(RichText::new(chrome::fit_text(ui, &m.code, &medium_font(13.0), room)).font(medium_font(13.0))).on_hover_text(&m.code);
-                        ui.label(RichText::new(chrome::fit_text(ui, &line, &egui::FontId::proportional(11.5), room)).size(11.5).color(t.text_dim)).on_hover_text(&line);
-                    });
+                    Self::describe(ui, m, (ui.available_width() - 80.0).max(60.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if chrome::remove_button(ui, "Delete from the library").clicked() {
-                            delete = Some(m.id.clone());
-                        }
                         if chrome::ghost_button(ui, "Browse").clicked() {
                             self.browse = Some(m.id.clone());
                             self.browse_chunks = lib.chunks(&m.id);
@@ -145,21 +158,81 @@ impl StandardsView {
                     });
                 });
             }
-            if let Some(id) = delete {
-                self.status = lib.delete(&id).map(|_| format!("Deleted {id}")).unwrap_or_else(|e| e);
-                chosen.retain(|x| x != &id);
-                changed = true;
+        });
+        ui.add_space(6.0);
+        if chrome::ghost_button(ui, "Import or manage standards in Settings").clicked() {
+            self.open_settings = true;
+        }
+        changed
+    }
+
+    /// Settings › Standards library: the pool every project and bot chooses from. Import,
+    /// delete, re-index, office rules, and a look at a standard's clauses. Returns the id of a
+    /// standard deleted this frame.
+    pub fn manage(&mut self, ui: &mut egui::Ui, lib: &Arc<Library>, embedder: &EmbedderConfig) -> Option<String> {
+        let t = tokens(ui);
+        self.poll(ui);
+        self.list_of(lib);
+        let mut deleted = None;
+        section(ui, "Library", &format!("{} standards", self.list.len()), |ui| {
+            if self.list.is_empty() {
+                chrome::hint(ui, "The library is empty. Import the standards you design to (your own licensed copies); agents cite only what is here.");
+            }
+            for m in &self.list {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(44.0);
+                    Self::describe(ui, m, (ui.available_width() - 130.0).max(60.0));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if chrome::remove_button(ui, "Delete from the library").clicked() {
+                            self.confirm_delete = Some(m.id.clone());
+                        }
+                        let open = self.browse.as_deref() == Some(m.id.as_str());
+                        if chrome::ghost_button(ui, if open { "Hide" } else { "Browse" }).clicked() {
+                            if open {
+                                self.browse = None;
+                            } else {
+                                self.browse = Some(m.id.clone());
+                                self.browse_chunks = lib.chunks(&m.id);
+                            }
+                        }
+                    });
+                });
+                if self.confirm_delete.as_deref() == Some(m.id.as_str()) {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("Delete {} from the library? Projects and bots that follow it stop finding it.", m.code)).size(12.0).color(t.error));
+                        if ui.add(egui::Button::new(RichText::new("Delete").color(t.error))).clicked() {
+                            deleted = Some(m.id.clone());
+                        }
+                        if ui.button("Keep").clicked() {
+                            self.confirm_delete = None;
+                        }
+                    });
+                }
+                if self.browse.as_deref() == Some(m.id.as_str()) {
+                    egui::ScrollArea::vertical().id_salt("browse_lib").max_height(420.0).show(ui, |ui| {
+                        for h in self.browse_chunks.iter().take(400) {
+                            ui.label(RichText::new(format!("{}  {}{}", h.clause, h.title, h.page.map(|p| format!("  · p. {p}")).unwrap_or_default())).font(medium_font(12.5)));
+                            let text: String = h.text.chars().take(600).collect();
+                            ui.label(RichText::new(text).size(12.0).color(t.text_dim));
+                            ui.add_space(6.0);
+                        }
+                    });
+                }
+            }
+            if let Some(id) = &deleted {
+                self.status = lib.delete(id).map(|_| format!("Deleted {id}")).unwrap_or_else(|e| e);
+                self.confirm_delete = None;
+                if self.browse.as_deref() == Some(id.as_str()) {
+                    self.browse = None;
+                }
                 self.stale = true;
             }
-        });
-        // standards indexed with another method than the current setting
-        let want = embedder.signature();
-        let other: Vec<String> = self.list.iter().filter(|m| m.embedder != want).map(|m| m.id.clone()).collect();
-        let all_current = other.is_empty();
-        if !other.is_empty() {
-            let how = if embedder.is_openrouter() { "the OpenRouter embedding model" } else { "the simple built-in method" };
-            chrome::hint(ui, &format!("{} standard(s) were indexed another way than the current setting ({how}). Re-index them so that search uses it.", other.len()));
-            ui.horizontal(|ui| {
+            // standards indexed with another method than the current setting
+            let want = embedder.signature();
+            let other: Vec<String> = self.list.iter().filter(|m| m.embedder != want).map(|m| m.id.clone()).collect();
+            if !other.is_empty() {
+                let how = if embedder.is_openrouter() { "the OpenRouter embedding model" } else { "the simple built-in method" };
+                chrome::hint(ui, &format!("{} standard(s) were indexed another way than the current setting ({how}). Re-index them so that search uses it.", other.len()));
                 if ui.add_enabled(self.import_rx.is_none(), chrome::primary_button("Re-index")).clicked() {
                     let (tx, rx) = mpsc::channel();
                     self.import_rx = Some(rx);
@@ -183,23 +256,22 @@ impl StandardsView {
                         ctx.request_repaint();
                     });
                 }
-            });
-        }
-        if all_current && !self.list.is_empty() {
-            let how = match embedder {
-                EmbedderConfig::Hashed { .. } => "simple search (words and clause numbers)".to_string(),
-                EmbedderConfig::Api { model, .. } => format!("the embedding model {model}"),
-            };
-            chrome::hint(ui, &format!("Searched with {how}. Change it under Settings › Standards search, then re-index here."));
-        }
-        if self.import_rx.is_some() && !self.show_import {
-            ui.add(egui::ProgressBar::new(self.progress.0).text(&self.progress.1));
-        }
-        if !self.show_import && chrome::ghost_button(ui, "+ Import a standard").clicked() {
-            self.show_import = true;
-        }
+            }
+            if self.import_rx.is_some() && !self.show_import {
+                ui.add(egui::ProgressBar::new(self.progress.0).text(&self.progress.1));
+            }
+            if !self.status.is_empty() {
+                ui.add_space(6.0);
+                ui.label(RichText::new(&self.status).size(12.0).color(t.text_dim));
+            }
+            ui.add_space(4.0);
+            if !self.show_import && chrome::ghost_button(ui, "+ Import a standard").clicked() {
+                self.show_import = true;
+            }
+        });
+
         if self.show_import || self.import_rx.is_some() {
-            chrome::explorer(ui, "Import a standard", "PDF, text or Markdown", |ui| {
+            section(ui, "Import a standard", "PDF, text or Markdown", |ui| {
                 chrome::field(ui, "Code", &mut self.new.code).on_hover_text("e.g. ACI 318-19, EN 1997-1:2004, AISC 360-22, มยผ. 1301");
                 chrome::field(ui, "Name", &mut self.new.name);
                 ui.horizontal(|ui| {
@@ -235,7 +307,7 @@ impl StandardsView {
                     EmbedderConfig::Api { base_url, model, .. } if base_url.contains("openrouter.ai") => format!("{model} through OpenRouter"),
                     EmbedderConfig::Api { model, .. } => format!("the embedding model {model}"),
                 };
-                chrome::hint(ui, &format!("Indexed with {embed_label}; change it in Settings."));
+                chrome::hint(ui, &format!("Indexed with {embed_label} (the Embedding setting below). A scanned PDF has no text to index: run OCR on it first, e.g. ocrmypdf --language tha+eng in.pdf out.pdf."));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let can = self.import_rx.is_none() && !self.files.is_empty() && !self.new.code.trim().is_empty();
@@ -261,35 +333,39 @@ impl StandardsView {
                 if self.import_rx.is_some() {
                     ui.add(egui::ProgressBar::new(self.progress.0).text(&self.progress.1));
                 }
-                ui.add_space(4.0);
             });
         }
-        if !self.status.is_empty() {
-            ui.add_space(6.0);
-            ui.label(RichText::new(&self.status).size(12.0).color(t.text_dim));
-        }
 
-        chrome::explorer(ui, "Office rule", "searchable like a clause", |ui| {
-            let target = self.browse.clone().or_else(|| self.list.first().map(|m| m.id.clone()));
+        section(ui, "Office rule", "searchable like a clause", |ui| {
+            if self.list.is_empty() {
+                chrome::hint(ui, "Import a standard first; a rule is attached to one.");
+                return;
+            }
+            if !self.list.iter().any(|m| m.id == self.note_target) {
+                self.note_target = self.list[0].id.clone();
+            }
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "Standard");
+                let shown = self.list.iter().find(|m| m.id == self.note_target).map(|m| m.code.clone()).unwrap_or_default();
+                egui::ComboBox::from_id_salt("note_std").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                    for m in &self.list {
+                        ui.selectable_value(&mut self.note_target, m.id.clone(), &m.code);
+                    }
+                });
+            });
             ui.horizontal(|ui| {
                 chrome::row_label(ui, "Clause");
                 ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.note.0).hint_text("e.g. 9.6.3").vertical_align(egui::Align::Center));
             });
             chrome::field(ui, "Title", &mut self.note.1);
-            ui.add(egui::TextEdit::multiline(&mut self.note.2).hint_text("The rule, e.g. 'Use cover 40 mm to stirrups for all beams exposed to weather.'").desired_rows(3).desired_width(f32::INFINITY));
-            match target {
-                Some(id) => {
-                    if ui.add_enabled(!self.note.2.trim().is_empty(), egui::Button::new(format!("Add to {id}"))).clicked() {
-                        self.status = lib.add_note(&id, &self.note.0, &self.note.1, &self.note.2).map(|_| "Office rule added.".to_string()).unwrap_or_else(|e| e);
-                        self.note = Default::default();
-                        self.stale = true;
-                    }
-                }
-                None => chrome::hint(ui, "Import a standard first; rules are attached to one."),
+            ui.add(egui::TextEdit::multiline(&mut self.note.2).hint_text("The rule, e.g. 'Use FS = 3.0 on end bearing in the Bangkok first sand.'").desired_rows(3).desired_width(f32::INFINITY));
+            if ui.add_enabled(!self.note.2.trim().is_empty(), egui::Button::new("Add the rule")).clicked() {
+                self.status = lib.add_note(&self.note_target, &self.note.0, &self.note.1, &self.note.2).map(|_| "Office rule added.".to_string()).unwrap_or_else(|e| e);
+                self.note = Default::default();
+                self.stale = true;
             }
-            ui.add_space(4.0);
         });
-        changed
+        deleted
     }
 
     /// The canvas: a floating search bar, then the results or the clauses being browsed.
@@ -352,4 +428,21 @@ impl StandardsView {
             }
         });
     }
+}
+
+/// A titled card, as the groups of the Settings page.
+fn section(ui: &mut egui::Ui, title: &str, context: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let t = tokens(ui);
+    ui.add_space(14.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).font(medium_font(14.0)));
+        if !context.is_empty() {
+            ui.label(RichText::new(context).size(12.0).color(t.text_faint));
+        }
+    });
+    ui.add_space(4.0);
+    egui::Frame::NONE.fill(t.card).stroke(egui::Stroke::new(1.0_f32, t.separator)).corner_radius(10).inner_margin(14).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        add(ui);
+    });
 }

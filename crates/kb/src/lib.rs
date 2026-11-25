@@ -538,10 +538,12 @@ impl Library {
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        // a project or bot may still name a standard deleted from the library since: skip it
+        let have: Vec<String> = self.list().into_iter().map(|m| m.id).collect();
         let ids: Vec<String> = if standard_ids.is_empty() {
-            self.list().into_iter().map(|m| m.id).collect()
+            have
         } else {
-            standard_ids.to_vec()
+            standard_ids.iter().filter(|id| have.contains(id)).cloned().collect()
         };
         let mut stds: Vec<Arc<Loaded>> = Vec::new();
         for id in &ids {

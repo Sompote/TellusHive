@@ -50,7 +50,7 @@ pub fn initials(name: &str) -> String {
 }
 
 fn look(b: &Bot) -> BotLook {
-    BotLook { name: b.name.clone(), tagline: b.tagline.clone(), avatar: b.has_avatar().then(|| b.avatar_path()), color: hex_color(&b.color, Color32::from_rgb(123, 79, 214)) }
+    BotLook { name: b.display_name(), tagline: b.tagline.clone(), avatar: b.has_avatar().then(|| b.avatar_path()), color: hex_color(&b.color, Color32::from_rgb(123, 79, 214)) }
 }
 
 /// A bot that has been opened: its engine, conversation and project.
@@ -88,6 +88,8 @@ pub struct BotsView {
     tab: Tab,
     dirty: Option<Instant>,
     confirm_delete: bool,
+    /// The bot whose "New conversation" in the chat header waits for a yes.
+    confirm_new: Option<String>,
     status: String,
     /// The saved teams: name, the lead's colour, number of agents.
     teams: Vec<(String, String, usize)>,
@@ -105,7 +107,7 @@ impl Default for BotsView {
     fn default() -> Self {
         let bots = Bot::list();
         let selected = bots.first().map(|b| b.id.clone());
-        BotsView { office: bots.is_empty(), bots, project_edited: None, slots: HashMap::new(), selected, profile: false, tab: Tab::Activity, dirty: None, confirm_delete: false, status: String::new(), teams: vec![], teams_at: None, pick_team: None, teams_open: false, models: None, models_rx: None }
+        BotsView { office: bots.is_empty(), bots, project_edited: None, slots: HashMap::new(), selected, profile: false, tab: Tab::Activity, dirty: None, confirm_delete: false, confirm_new: None, status: String::new(), teams: vec![], teams_at: None, pick_team: None, teams_open: false, models: None, models_rx: None }
     }
 }
 
@@ -174,6 +176,29 @@ impl BotsView {
         }
     }
 
+    /// A message from a connected agent for a bot (by name or id). The reply goes back on
+    /// `reply` when the run ends; a busy or unknown bot is answered at once.
+    pub fn external_ask(&mut self, who: &str, text: &str, reply: std::sync::mpsc::Sender<Result<String, String>>, base: &Arc<Engine>, ctx: &egui::Context) {
+        let key = who.trim().to_lowercase();
+        let Some(id) = self.bots.iter().find(|b| b.name.to_lowercase() == key || b.id == key).map(|b| b.id.clone()) else {
+            let names: Vec<String> = self.bots.iter().map(|b| b.name.clone()).collect();
+            let _ = reply.send(Err(format!("no bot named '{who}'. The bots are: {}", if names.is_empty() { "none".to_string() } else { names.join(", ") })));
+            return;
+        };
+        if let Err(e) = self.open_slot(&id, base) {
+            let _ = reply.send(Err(e));
+            return;
+        }
+        let Some(s) = self.slots.get_mut(&id) else { return };
+        if s.chat.busy() {
+            let _ = reply.send(Err(format!("{who} is working on another task; ask again when it has finished")));
+            return;
+        }
+        s.chat.external_reply = Some(reply);
+        let engine = s.engine.clone();
+        s.chat.send_text(&engine, ctx, text);
+    }
+
     /// Files dropped on the window go to the bot on screen.
     pub fn add_attachment(&mut self, p: PathBuf) {
         if let Some(id) = self.selected.clone() {
@@ -202,7 +227,10 @@ impl BotsView {
         let project = b.project()?;
         let settings = Bot::engine_settings(&base.settings.read().map(|s| s.clone()).unwrap_or_default(), &self.bots);
         let engine = Arc::new(Engine::new(settings, b.team_spec(&self.bots), project.clone(), base.library.clone(), base.plugins.clone()));
-        let mut chat = ChatView::new(ChatView::load(&project.dir));
+        // each bot keeps its own conversation, also when several bots work in one project
+        engine.use_bot_chat(b);
+        let mut chat = ChatView::new(ChatView::load_file(&project.dir, &b.chat_file()));
+        chat.file = b.chat_file();
         chat.bot = Some(look(b));
         self.slots.insert(id.to_string(), Slot { engine, chat, project, artifacts: vec![], artifacts_at: None });
         Ok(())
@@ -266,6 +294,8 @@ impl BotsView {
         b.character = character.to_string();
         let palette = ["#7b4fd6", "#2f74d0", "#2e9e4b", "#c25a35", "#1d8fb5", "#a87a1e", "#c23b2e"];
         b.color = palette[self.bots.len() % palette.len()].to_string();
+        // "works alone" calls no one; "calls a team" calls that team only
+        b.call_any = false;
         if mode == BotMode::Team {
             b.team = TeamSpec::list().first().map(|t| t.name.clone()).unwrap_or_else(|| "Design office".into());
         }
@@ -366,8 +396,15 @@ impl BotsView {
                             let (r, _) = ui.allocate_exact_size(egui::vec2(48.0, 1.0), egui::Sense::hover());
                             ui.painter().hline(r.x_range(), r.center().y, egui::Stroke::new(1.0_f32, t.separator));
                         }
-                        let label = format!("Teams {}", if self.teams_open { "▾" } else { "▸" });
-                        let r = ui.add(egui::Label::new(RichText::new(label).size(11.0).color(if self.teams_open || self.office { t.text_dim } else { t.text_faint })).sense(egui::Sense::click()));
+                        let col = if self.teams_open || self.office { t.text_dim } else { t.text_faint };
+                        // the label and room for the arrow after it, as one clickable area
+                        let galley = ui.painter().layout_no_wrap("Teams".into(), egui::FontId::proportional(11.0), col);
+                        let (r, resp) = ui.allocate_exact_size(egui::vec2(galley.size().x + 14.0, galley.size().y + 4.0), egui::Sense::click());
+                        ui.painter().galley(egui::pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, col);
+                        let r = resp;
+                        let c = egui::pos2(r.rect.right() - 4.0, r.rect.center().y);
+                        let tri = if self.teams_open { vec![c + egui::vec2(-3.5, -2.0), c + egui::vec2(3.5, -2.0), c + egui::vec2(0.0, 2.5)] } else { vec![c + egui::vec2(-2.0, -3.5), c + egui::vec2(2.5, 0.0), c + egui::vec2(-2.0, 3.5)] };
+                        ui.painter().add(egui::Shape::convex_polygon(tri, col, egui::Stroke::NONE));
                         if r.on_hover_text(if self.teams_open { "Hide the teams" } else { "Show the teams, to talk to one directly" }).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             self.teams_open = !self.teams_open;
                         }
@@ -425,19 +462,41 @@ impl BotsView {
 
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.field)).show(ctx, |ui| {
             let Some(b) = self.bots.iter().find(|b| b.id == id).cloned() else { return };
+            let busy = self.slots.get(&id).is_some_and(|s| s.chat.busy());
+            let mut new_chat = false;
             // the name chip, top right: opens the profile
             egui::TopBottomPanel::top("bot_head").frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 10, bottom: 4 })).show_separator_line(false).show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let galley = ui.painter().layout_no_wrap(b.name.clone(), medium_font(14.0), t.text);
+                    let shown = chrome::fit_text(ui, &b.display_name(), &medium_font(14.0), (ui.available_width() * 0.45).clamp(120.0, 360.0));
+                    let galley = ui.painter().layout_no_wrap(shown, medium_font(14.0), t.text);
                     let w = galley.size().x + 56.0;
                     let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::click());
                     let fill = if self.profile || resp.hovered() { t.hover } else { t.card };
                     ui.painter().rect(r, 20.0, fill, egui::Stroke::new(1.0_f32, t.separator), egui::StrokeKind::Inside);
                     let a = egui::Rect::from_center_size(egui::pos2(r.left() + 22.0, r.center().y), egui::vec2(28.0, 28.0));
-                    paint_avatar(ui, a, &b.name, hex_color(&b.color, t.accent), b.has_avatar().then(|| b.avatar_path()).as_deref());
+                    paint_avatar(ui, a, &b.display_name(), hex_color(&b.color, t.accent), b.has_avatar().then(|| b.avatar_path()).as_deref());
                     ui.painter().galley(egui::pos2(r.left() + 44.0, r.center().y - galley.size().y / 2.0), galley, t.text);
                     if resp.on_hover_text(if self.profile { "Close the profile" } else { "Profile: picture, character, model, files" }).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         self.profile = !self.profile;
+                    }
+                    ui.add_space(10.0);
+                    // a fresh start: the chat clears and the bot forgets this conversation
+                    if self.confirm_new.as_deref() == Some(id.as_str()) {
+                        if ui.button("Keep").clicked() {
+                            self.confirm_new = None;
+                        }
+                        if ui.add_enabled(!busy, egui::Button::new(RichText::new("Clear").color(t.error))).clicked() {
+                            new_chat = true;
+                            self.confirm_new = None;
+                        }
+                        ui.label(RichText::new("Start a new conversation? The bot forgets this one.").size(12.0).color(t.text_dim));
+                    } else if ui
+                        .add_enabled(!busy, egui::Button::new(RichText::new("New conversation").font(medium_font(12.5))))
+                        .on_hover_text("Clears this chat and starts a fresh conversation; the bot's files stay, and the old conversation is kept in the sessions folder")
+                        .on_disabled_hover_text("Stop the bot first")
+                        .clicked()
+                    {
+                        self.confirm_new = Some(id.clone());
                     }
                     ui.add_space(8.0);
                     ui.label(RichText::new(b.engine_line(settings, &self.bots)).size(12.0).color(t.text_faint));
@@ -448,6 +507,11 @@ impl BotsView {
                 });
             });
             let Some(s) = self.slots.get_mut(&id) else { return };
+            if new_chat && !s.chat.busy() {
+                s.chat.clear();
+                s.engine.new_conversation();
+                s.chat.save(&s.project.dir);
+            }
             let colours: Vec<(String, Color32)> = s.engine.team.read().map(|tm| tm.agents.iter().map(|a| (a.name.clone(), hex_color(&a.color, Color32::from_rgb(47, 116, 208)))).collect()).unwrap_or_default();
             let f = move |n: &str| colours.iter().find(|(k, _)| k == n).map(|(_, c)| *c).unwrap_or(Color32::from_rgb(120, 120, 130));
             let engine = s.engine.clone();
@@ -886,6 +950,10 @@ impl BotsView {
 
             section_title(ui, "Calls");
             chrome::hint(ui, "Whom the bot hands work to. A team joins through its coordinator, who leads it like another bot. With nothing to call, the bot works alone.");
+            chrome::switch_row(ui, "May call any team or bot", &mut b.call_any).on_hover_text("The bot chooses whom to hand each task to: any saved team (through its lead) or any other bot. Switch off to choose them yourself.");
+            if b.call_any {
+                chrome::hint(ui, &format!("It can call {} teams and {} other bots.", teams.len(), others.iter().filter(|o| o.0 != b.id).count()));
+            } else {
             let mut team_on = b.mode == BotMode::Team;
             ui.horizontal(|ui| {
                 if chrome::switch(ui, &mut team_on).changed() {
@@ -919,13 +987,14 @@ impl BotsView {
                     ui.label(oname);
                 });
             }
+            }
 
             section_title(ui, "Standards and plugins");
             chrome::hint(ui, "The bot's bundle. It sets its project up with these, so every agent it calls cites these standards and drives these programs.");
             let lib = base.library.list();
             egui::CollapsingHeader::new(RichText::new(format!("Standards · {} of {}", b.standards.len(), lib.len())).font(medium_font(13.0))).id_salt("bot_std").show(ui, |ui| {
                 if lib.is_empty() {
-                    chrome::hint(ui, "The standards library is empty: import standards under Project › Standards.");
+                    chrome::hint(ui, "The standards library is empty: import standards under Settings › Standards library.");
                 }
                 for m in &lib {
                     let mut on = b.standards.contains(&m.id);
@@ -944,6 +1013,8 @@ impl BotsView {
             egui::CollapsingHeader::new(RichText::new(format!("Plugins · {used} of {}", enabled.len())).font(medium_font(13.0))).id_salt("bot_plug").show(ui, |ui| {
                 if enabled.is_empty() {
                     chrome::hint(ui, "No plugins switched on: add MCP programs under Project › Plugins.");
+                } else {
+                    chrome::hint(ui, "The programs this bot drives itself. Each one starts when the bot runs, so switch on only those it needs; the teams it calls use their own.");
                 }
                 for (name, about) in &enabled {
                     let mut on = all_on || b.plugins.contains(name);
@@ -1011,9 +1082,6 @@ impl BotsView {
             self.confirm_delete = false;
             self.profile = false;
             return false;
-        }
-        if self.bots[idx].name.trim().is_empty() {
-            self.bots[idx].name = before.name.clone();
         }
         self.bots[idx] != before || changed_avatar
     }

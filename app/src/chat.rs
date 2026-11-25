@@ -157,6 +157,8 @@ pub struct ChatView {
     pub bot: Option<BotLook>,
     /// The transcript file in the project folder ("chat.json", or one per team).
     pub file: String,
+    /// A connected agent (MCP server) waiting for the reply of the running task.
+    pub external_reply: Option<std::sync::mpsc::Sender<Result<String, String>>>,
 }
 
 /// How a bot's chat looks: whose replies are the bubbles, and its picture.
@@ -169,8 +171,14 @@ pub struct BotLook {
 }
 
 impl ChatView {
-    pub fn new(saved: Saved) -> Self {
-        ChatView { saved, input: String::new(), attachments: vec![], rx: None, cancel: Arc::new(AtomicBool::new(false)), depth: Default::default(), busy_since: None, new_artifacts: vec![], open_request: None, scroll_to_end: true, run_usage: UsageReport::default(), live: vec![], finished: vec![], names: Default::default(), model_saves: vec![], open_model: None, announced: Default::default(), streaming: Default::default(), bot: None, file: "chat.json".into() }
+    pub fn new(mut saved: Saved) -> Self {
+        // a task the app was closed during has no outcome: say so, instead of a bare request
+        if let Some(i) = saved.entries.iter().rposition(|e| matches!(e, Entry::User { .. })) {
+            if !saved.entries[i..].iter().any(|e| matches!(e, Entry::Usage { .. } | Entry::Error { .. })) {
+                saved.entries.push(Entry::Usage { report: UsageReport { outcome: "interrupted".into(), ..Default::default() } });
+            }
+        }
+        ChatView { saved, input: String::new(), attachments: vec![], rx: None, cancel: Arc::new(AtomicBool::new(false)), depth: Default::default(), busy_since: None, new_artifacts: vec![], open_request: None, scroll_to_end: true, run_usage: UsageReport::default(), live: vec![], finished: vec![], names: Default::default(), model_saves: vec![], open_model: None, announced: Default::default(), streaming: Default::default(), bot: None, file: "chat.json".into(), external_reply: None }
     }
 
     /// For the UI screenshots (TELLUSHIVE_SHOT_BUSY=1): a task that looks as if it were running,
@@ -280,6 +288,12 @@ impl ChatView {
         });
     }
 
+    /// Sends a message that came from outside the window (a connected agent).
+    pub fn send_text(&mut self, engine: &Arc<Engine>, ctx: &egui::Context, text: &str) {
+        self.input = text.to_string();
+        self.send(engine, ctx);
+    }
+
     pub fn stop(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
@@ -294,21 +308,10 @@ impl ChatView {
             match m {
                 WorkerMsg::Event(e) => self.on_event(e),
                 WorkerMsg::Done(r) => {
-                    let mut report = std::mem::take(&mut self.run_usage);
-                    report.seconds = self.busy_since.map(|b| b.elapsed().as_secs()).unwrap_or(0);
-                    report.outcome = match &r {
-                        Ok(_) => "finished".into(),
-                        Err(e) if e == "cancelled" => "stopped".into(),
-                        Err(_) => "failed".into(),
-                    };
-                    if let Err(e) = r {
-                        if !self.saved.entries.iter().rev().take(3).any(|x| matches!(x, Entry::Error { text } if *text == e)) {
-                            self.saved.entries.push(Entry::Error { text: e });
-                        }
+                    if let Some(tx) = self.external_reply.take() {
+                        let _ = tx.send(r.clone());
                     }
-                    if report.totals().0 > 0 {
-                        self.saved.entries.push(Entry::Usage { report });
-                    }
+                    self.end_run(&r);
                     finished = true;
                 }
             }
@@ -319,6 +322,45 @@ impl ChatView {
             self.live.clear();
         }
         finished
+    }
+
+    /// Starts a task run outside the window (the `serve` mode): the engineer's message goes
+    /// into the transcript and the per-task state is reset, as `send` does.
+    pub fn begin_run(&mut self, text: &str, attachments: Vec<PathBuf>, names: std::collections::HashMap<String, String>) {
+        self.saved.entries.push(Entry::User { text: text.to_string(), attachments });
+        self.busy_since = Some(std::time::Instant::now());
+        self.run_usage = UsageReport::default();
+        self.live.clear();
+        self.finished.clear();
+        self.announced.clear();
+        self.names = names;
+    }
+
+    /// Takes one engine event into the transcript (the `serve` mode's worker calls this).
+    pub fn record(&mut self, e: Event) {
+        self.on_event(e);
+    }
+
+    /// Closes a task run: its error, if any, and its token-use card.
+    pub fn end_run(&mut self, r: &Result<String, String>) {
+        let mut report = std::mem::take(&mut self.run_usage);
+        report.seconds = self.busy_since.map(|b| b.elapsed().as_secs()).unwrap_or(0);
+        report.outcome = match r {
+            Ok(_) => "finished".into(),
+            Err(e) if e == "cancelled" => "stopped".into(),
+            Err(_) => "failed".into(),
+        };
+        // Stop is the engineer's own choice, not an error: the usage card says "Stopped"
+        let stopped = matches!(r, Err(e) if e == "cancelled");
+        if let Err(e) = r {
+            if !stopped && !self.saved.entries.iter().rev().take(3).any(|x| matches!(x, Entry::Error { text } if text == e)) {
+                self.saved.entries.push(Entry::Error { text: e.clone() });
+            }
+        }
+        if report.totals().0 > 0 || stopped {
+            self.saved.entries.push(Entry::Usage { report });
+        }
+        self.busy_since = None;
     }
 
     fn on_event(&mut self, e: Event) {
@@ -449,7 +491,7 @@ impl ChatView {
             0 => "Getting started".into(),
             1 => format!("{}: {}", a[0].agent, a[0].activity),
             2 | 3 => format!("{} are working at the same time", join_names(&a.iter().map(|l| l.agent.clone()).collect::<Vec<_>>())),
-            n => format!("{n} team members are working at the same time"),
+            n => format!("{n} agents are working at the same time"),
         }
     }
 
@@ -504,8 +546,8 @@ impl ChatView {
             ui.horizontal(|ui| {
                 let head = match n {
                     0 => "Getting started".to_string(),
-                    1 => "1 team member is working".to_string(),
-                    n => format!("{n} team members are working at the same time"),
+                    1 => "1 agent is working".to_string(),
+                    n => format!("{n} agents are working at the same time"),
                 };
                 ui.label(RichText::new(head).font(medium_font(12.5)).color(t.text));
                 ui.label(RichText::new(format!("{}:{:02}", secs / 60, secs % 60)).monospace().size(11.5).color(t.text_dim));
@@ -674,7 +716,8 @@ impl ChatView {
                         if let Some(look) = self.bot.clone() {
                             bot_empty_ui(ui, &look);
                         } else {
-                            self.empty_ui(ui, full);
+                            let team = engine.team.read().map(|t| (t.name.clone(), t.agent(&t.coordinator).map(|a| a.name.clone()).unwrap_or_default(), t.agents.iter().filter(|a| a.id != t.coordinator).map(|a| a.name.clone()).collect::<Vec<_>>())).unwrap_or_default();
+                            self.empty_ui(ui, full, &team);
                         }
                     }
                     // simple view: an agent's consecutive steps fold into one line; its reasoning is left out
@@ -709,14 +752,20 @@ impl ChatView {
         });
     }
 
-    fn empty_ui(&mut self, ui: &mut egui::Ui, full: bool) {
+    /// The first screen of a team's chat: who leads it and whom it hands work to.
+    fn empty_ui(&mut self, ui: &mut egui::Ui, full: bool, team: &(String, String, Vec<String>)) {
         let t = tokens(ui);
         if full {
             ui.add_space(30.0);
         }
-        ui.label(RichText::new("What should the office design?").font(medium_font(if full { 22.0 } else { 15.0 })));
+        let (name, lead, members) = team;
+        ui.label(RichText::new(format!("What should {} design?", if name.is_empty() { "the team" } else { name })).font(medium_font(if full { 22.0 } else { 15.0 })));
         ui.add_space(4.0);
-        ui.label(RichText::new("The coordinator plans the work and delegates it: the designer calculates to the standards you chose, the checker verifies independently, the drafter draws, and the reporter writes the PDF calculation report.").color(t.text_dim));
+        let about = match members.len() {
+            0 => format!("{lead} works on its own: it plans, calculates to the standards you chose and reports."),
+            _ => format!("{lead} plans the work and hands it to {}.", join_names(members)),
+        };
+        ui.label(RichText::new(about).color(t.text_dim));
         ui.add_space(14.0);
         let examples = [
             ("RC beam", "Design a simply supported RC beam, span 6 m, 300 x 500 mm, wD = 15 kN/m, wL = 10 kN/m, f'c 28 MPa, fy 420 MPa, to ACI 318-19. Check it, draw the section and write the report."),
@@ -902,19 +951,22 @@ fn usage_card(ui: &mut egui::Ui, r: &UsageReport, t: &crate::theme::Tokens, i: u
     let (mark, col) = match r.outcome.as_str() {
         "finished" => ("Finished", t.ok),
         "stopped" => ("Stopped", t.warn),
+        "interrupted" => ("Interrupted: the app was closed during this task", t.warn),
         _ => ("Failed", t.error),
     };
     egui::Frame::NONE.fill(t.field).stroke(egui::Stroke::new(1.0_f32, t.separator)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.label(RichText::new(mark).font(medium_font(12.5)).color(col));
-            ui.label(RichText::new(format!("in {}:{:02}", r.seconds / 60, r.seconds % 60)).size(12.0).color(t.text_dim));
+            if r.outcome != "interrupted" {
+                ui.label(RichText::new(format!("in {}:{:02}", r.seconds / 60, r.seconds % 60)).size(12.0).color(t.text_dim));
+            }
             if !details {
                 let mut who: Vec<&str> = r.agents.iter().map(|a| a.agent.as_str()).collect();
                 who.dedup();
                 who.sort();
                 who.dedup();
-                ui.label(RichText::new(format!("· {} took part", if who.len() == 1 { "1 team member".to_string() } else { format!("{} team members", who.len()) })).size(12.0).color(t.text_dim)).on_hover_text(who.join(", "));
+                if !who.is_empty() { ui.label(RichText::new(format!("· {} took part", if who.len() == 1 { "1 agent".to_string() } else { format!("{} agents", who.len()) })).size(12.0).color(t.text_dim)).on_hover_text(who.join(", ")); }
                 return;
             }
             ui.label(RichText::new(format!("· {}", r.line())).size(12.0).color(t.text));

@@ -639,7 +639,7 @@ impl TeamView {
             }
         }
         if chrome::ghost_button(ui, "+ New team").on_hover_text("A new team with only a team lead; add agents to it").clicked() {
-            let mut n = teams.len() + 1;
+            let mut n = 1;
             while TeamSpec::exists(&format!("Team {n}")) {
                 n += 1;
             }

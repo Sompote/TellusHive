@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TellusHive</title>
+  <meta name="description" content="An open-source team of AI agents for civil engineering design: it calculates to your standards, checks its own work, draws the details and writes the report.">
+  <link rel="icon" href="assets/icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="bar" id="top">
+    <a class="bar__brand link" href="#top" aria-label="TellusHive, back to top">
+      <img src="assets/icon.png" alt="" width="28" height="28">
+      <span>TellusHive</span>
+    </a>
+    <nav class="bar__nav" aria-label="Sections">
+      <a class="link" href="#team">Team</a>
+      <a class="link" href="#evidence">Evidence</a>
+      <a class="link" href="#download">Download</a>
+      <a class="link" href="https://github.com/Sompote/TellusHive">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- 1. Hero: a live calculation -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero__copy">
+        <p class="eyebrow mono">Open source &middot; Rust &middot; macOS and Windows</p>
+        <h1 class="display" id="hero-title">Design that shows <em>its working.</em></h1>
+        <p class="lede">A team of AI agents for civil engineering design.<span class="lede__more"> Describe the beam, footing, wall or slope; a coordinator hands it to a designer, a checker and analysts that calculate to your standards, run the analysis programs, draw the details and write the calculation report.</span></p>
+        <div class="actions">
+          <a class="btn btn--primary" href="#download">Download 0.1.9</a>
+          <a class="btn btn--ghost" href="https://github.com/Sompote/TellusHive">Read the source</a>
+        </div>
+      </div>
+
+      <figure class="calc">
+        <figcaption class="calc__head mono">
+          <span>Calc 01 &middot; Simply supported beam, point load</span>
+          <span class="calc__hint">Move along the beam to place the load</span>
+        </figcaption>
+        <div class="calc__stage" id="stage">
+          <svg class="calc__svg" id="calc" viewBox="0 -44 1000 460" aria-hidden="true">
+            <line class="dim" x1="80" y1="6" x2="920" y2="6"/>
+            <line class="dim" x1="80" y1="-2" x2="80" y2="14"/>
+            <line class="dim" x1="920" y1="-2" x2="920" y2="14"/>
+            <text class="lbl" x="500" y="-10" text-anchor="middle">L = 8.00 m</text>
+            <rect class="member" x="80" y="150" width="840" height="14"/>
+            <path class="support" d="M80 164 L64 192 L96 192 Z"/>
+            <path class="support" d="M920 164 L906 184 L934 184 Z"/>
+            <circle class="support" cx="912" cy="190" r="5"/><circle class="support" cx="928" cy="190" r="5"/>
+            <line class="ground" x1="54" y1="198" x2="106" y2="198"/>
+            <line class="ground" x1="894" y1="198" x2="946" y2="198"/>
+            <path class="hatch" d="M58 208 L66 198 M68 208 L76 198 M78 208 L86 198 M88 208 L96 198 M98 208 L106 198"/>
+            <path class="hatch" d="M898 208 L906 198 M908 208 L916 198 M918 208 L926 198 M928 208 L936 198 M938 208 L946 198"/>
+            <g class="react"><line x1="80" y1="248" x2="80" y2="216"/><path d="M74 226 L80 213 L86 226 Z"/></g>
+            <g class="react"><line x1="920" y1="248" x2="920" y2="216"/><path d="M914 226 L920 213 L926 226 Z"/></g>
+            <g id="load" class="load" transform="translate(500 0)">
+              <line x1="0" y1="78" x2="0" y2="144"/>
+              <path d="M-7 132 L0 147 L7 132 Z"/>
+              <text class="lbl lbl--accent" x="0" y="68" text-anchor="middle">P = 120 kN</text>
+            </g>
+            <text class="lbl rlbl" x="96" y="242" text-anchor="start" id="ra-t">60.0 kN</text>
+            <text class="lbl rlbl" x="904" y="242" text-anchor="end" id="rb-t">60.0 kN</text>
+            <line class="axis" x1="80" y1="262" x2="920" y2="262"/>
+            <path id="bmd" class="bmd" d="M80 262 L500 382 L920 262 Z"/>
+            <line id="mmax" class="mmax" x1="500" y1="262" x2="500" y2="382"/>
+            <text id="mmax-t" class="lbl lbl--accent" x="500" y="408" text-anchor="middle">240.0 kNm</text>
+            <text class="lbl lbl--muted" x="88" y="292" text-anchor="start">M</text>
+          </svg>
+        </div>
+        <dl class="calc__out mono" aria-live="polite">
+          <div><dt>a</dt><dd><b id="o-a">4.00</b> m</dd></div>
+          <div><dt>R<sub>A</sub></dt><dd><b id="o-ra">60.0</b> kN</dd></div>
+          <div><dt>R<sub>B</sub></dt><dd><b id="o-rb">60.0</b> kN</dd></div>
+          <div><dt>M<sub>max</sub></dt><dd><b id="o-m">240.0</b> kNm</dd></div>
+          <div class="calc__check"><dt>Indicative section, f<sub>y</sub> 400 MPa</dt><dd><span id="o-sec">300 &times; 600</span>, <span id="o-bar">3 DB25</span></dd></div>
+        </dl>
+      </figure>
+    </section>
+
+    <!-- 2. Statement -->
+    <section class="statement" aria-labelledby="st-title">
+      <h2 class="visually-hidden" id="st-title">Why it exists</h2>
+      <p class="statement__text">A design is only as good as the trail behind it. Every number TellusHive gives you comes from a calculation it saved, a clause it can cite or a program it ran, and a second agent recomputes it before you see it.</p>
+      <ul class="notes mono" aria-label="Principles">
+        <li><span>A</span>Traceable: values are pinned to the calculation that produced them.</li>
+        <li><span>B</span>Checked: an independent checker returns pass or a list of errors.</li>
+        <li><span>C</span>Honest: when the standards library does not cover a method, it says so.</li>
+      </ul>
+    </section>
+
+    <!-- 3. The team as a drawing register -->
+    <section class="team" id="team" aria-labelledby="team-title">
+      <div class="team__head">
+        <h2 class="h2" id="team-title">A design office, listed like a drawing register.</h2>
+        <p class="muted">Nine agents, each with one discipline and its own tools. The coordinator leads, and it is the only one you talk to.</p>
+      </div>
+      <ol class="register">
+        <li class="reg reg--head mono" aria-hidden="true"><span>Sheet</span><span>Agent</span><span>Scope</span><span>Issues</span></li>
+        <li class="reg reg--lead">
+          <span class="reg__no mono">S-00</span>
+          <h3 class="reg__name">Coordinator</h3>
+          <p class="reg__role">Plans the design, delegates and reviews the specialists' work, and answers you.</p>
+          <span class="reg__out mono">Plan, answers</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-01</span>
+          <h3 class="reg__name">Designer</h3>
+          <p class="reg__role">Looks up the clauses of the chosen standard and writes traceable calculations for members and foundations.</p>
+          <span class="reg__out mono">Calculations</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-02</span>
+          <h3 class="reg__name">Checker</h3>
+          <p class="reg__role">Recomputes the key results independently, verifies clause use and returns pass or the errors.</p>
+          <span class="reg__out mono">Pass or errors</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-03</span>
+          <h3 class="reg__name">Drafter</h3>
+          <p class="reg__role">Draws sections, plans and details of the design.</p>
+          <span class="reg__out mono">SVG, DXF</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-04</span>
+          <h3 class="reg__name">Reporter</h3>
+          <p class="reg__role">Assembles the calculation report from the saved calculations and drawings.</p>
+          <span class="reg__out mono">PDF, Markdown</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-05</span>
+          <h3 class="reg__name">Structural analyst</h3>
+          <p class="reg__role">Frames, walls and slabs with member design to ACI, AISC and EC3, pushover, and continuum finite elements.</p>
+          <span class="reg__out mono">Pondus, ContinuaX</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-06</span>
+          <h3 class="reg__name">Geotechnical analyst</h3>
+          <p class="reg__role">Slope stability, finite element analysis of excavations, embankments and foundations, consolidation and site response.</p>
+          <span class="reg__out mono">TellusLEM, Tellus, Motus</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-07</span>
+          <h3 class="reg__name">BIM modeller</h3>
+          <p class="reg__role">Builds the BIM model from the design: levels, grids, members, rebar and terrain.</p>
+          <span class="reg__out mono">Aedifex, IFC</span>
+        </li>
+        <li class="reg">
+          <span class="reg__no mono">S-08</span>
+          <h3 class="reg__name">Particle modeller</h3>
+          <p class="reg__role">Discrete element and grain-water simulations of granular flow, debris flow and scour.</p>
+          <span class="reg__out mono">Granum, GranumFL</span>
+        </li>
+      </ol>
+    </section>
+
+    <!-- 4. Evidence -->
+    <section class="evidence" id="evidence" aria-labelledby="ev-title">
+      <p class="eyebrow mono">Test certificate &middot; GeoTechBench &middot; 54 items</p>
+      <h2 class="visually-hidden" id="ev-title">Evidence</h2>
+      <div class="evidence__figure">
+        <span class="big" id="count" data-to="35">35</span>
+        <span class="big big--ghost">/&thinsp;54</span>
+      </div>
+      <div class="evidence__grid">
+        <p class="evidence__claim">solved when each agent is briefed with the passages of the standards that fit its task, against <b>26</b> without the briefing.</p>
+        <dl class="spec mono">
+          <div><dt>Team</dt><dd>Coordinator, designer and checker on Claude Code</dd></div>
+          <div><dt>Items</dt><dd>Six templates whose methods the library holds</dd></div>
+          <div><dt>Test</dt><dd>Exact McNemar, p = 0.022</dd></div>
+          <div><dt>Caveat</dt><dd>On 33 random items it changed nothing, 31 against 31</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- 5. Workflow on one dimension line -->
+    <section class="flow" aria-labelledby="flow-title">
+      <h2 class="h2" id="flow-title">From a sentence to a checked calculation.</h2>
+      <div class="flow__dim mono" aria-hidden="true"><span>One request</span><span>Three stages, one record</span></div>
+      <ol class="flow__line">
+        <li class="tick">
+          <span class="tick__no mono">01</span>
+          <h3>Ask</h3>
+          <p>Describe the element in plain words, attach the drawings or borehole log, and choose the standards the project follows.</p>
+        </li>
+        <li class="tick">
+          <span class="tick__no mono">02</span>
+          <h3>Calculate</h3>
+          <p>The coordinator delegates. Agents search the standards, run design modules and Python, and drive analysis programs over MCP.</p>
+        </li>
+        <li class="tick">
+          <span class="tick__no mono">03</span>
+          <h3>Check and report</h3>
+          <p>The checker recomputes, the drafter draws and the reporter writes the report, with every value traced to its source.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- 6. Download as a title block -->
+    <section class="download" id="download" aria-labelledby="dl-title">
+      <h2 class="h2" id="dl-title">Download</h2>
+      <p class="muted">Version 0.1.9, developer preview. Not signed by Apple or Microsoft: on macOS right-click the app and choose Open the first time; on Windows choose More info, then Run anyway.</p>
+      <div class="block">
+        <div class="block__rel">
+          <span class="k mono">Release</span>
+          <span class="block__ver">0.1.9</span>
+          <span class="mono block__date">Developer preview &middot; 26 Nov 2026</span>
+        </div>
+        <a class="block__dl" href="https://github.com/Sompote/TellusHive/releases/download/v0.1.9/TellusHive-0.1.9-macos-universal.zip">
+          <span class="k mono">macOS 11 or newer &middot; Apple silicon and Intel</span>
+          <span class="block__sys">Download for Mac</span>
+          <span class="mono block__file">TellusHive-0.1.9-macos-universal.zip &middot; 26.7 MB</span>
+        </a>
+        <a class="block__dl" href="https://github.com/Sompote/TellusHive/releases/download/v0.1.9/TellusHive-0.1.9-windows-x64.zip">
+          <span class="k mono">Windows 10 or 11 &middot; 64-bit</span>
+          <span class="block__sys">Download for Windows</span>
+          <span class="mono block__file">TellusHive-0.1.9-windows-x64.zip &middot; 18.5 MB</span>
+        </a>
+        <div class="block__sums mono">
+          <span class="k">SHA-256</span>
+          <button class="copy" type="button" data-sum="681106fa778f719d61df8f77b7cfe226ca83a926b809b4659e10b1c06ba7c8d8" aria-label="Copy macOS checksum">Mac 681106fa&hellip;7c8d8</button>
+          <button class="copy" type="button" data-sum="1cd05a41a26e9da32b23d0fa255734621cf1b5e6fdf41c4606db177ed845b7ee" aria-label="Copy Windows checksum">Win 1cd05a41&hellip;b7ee</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 7. Footer as a sheet border -->
+  <footer class="sheet mono">
+    <div class="sheet__cell"><span class="k">Project</span>TellusHive</div>
+    <div class="sheet__cell"><span class="k">Rev</span>0.1.9</div>
+    <div class="sheet__cell"><span class="k">Licence</span>Open source, see LICENSE</div>
+    <div class="sheet__cell"><span class="k">Drawn by</span>AI Research Group, Civil Engineering, KMUTT</div>
+    <div class="sheet__cell sheet__cell--wide"><span class="k">Note</span>Check every design before you use it. Read SAFETY.md first.</div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>

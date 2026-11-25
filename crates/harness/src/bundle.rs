@@ -320,12 +320,13 @@ fn external_tool(d: &Arc<Domain>, which: Which) -> ToolDef {
     let (name, desc) = match which {
         Which::ClaudeCode => ("run_claude_code", "Run Claude Code (Anthropic's coding agent) on a programming task in the project's work folder."),
         Which::Codex => ("run_codex", "Run Codex (OpenAI's coding agent) on a programming task in the project's work folder."),
+        Which::Agy => ("run_antigravity", "Run Antigravity (Google's coding agent) on a task in the project's work folder."),
     };
     let (d1, d2) = (d.clone(), d.clone());
     ToolDef::new(name, desc, json!({"type":"object","properties":{"task":{"type":"string","description":"Complete task description"},"subfolder":{"type":"string","description":"Folder under work/ (default: work/)"}},"required":["task"]}), move |t, a| {
         let settings = d1.settings();
         let project = d1.project();
-        let cfg = if which == Which::ClaudeCode { &settings.claude_code } else { &settings.codex };
+        let cfg = &which.config(&settings);
         let task = a.get("task").and_then(|v| v.as_str()).ok_or("missing 'task'")?;
         let sub = a.get("subfolder").and_then(|v| v.as_str()).unwrap_or("");
         let workdir = project.resolve(&format!("work/{}", sub.trim_start_matches("work/")))?;
@@ -339,7 +340,7 @@ fn external_tool(d: &Arc<Domain>, which: Which) -> ToolDef {
     .always()
     .when(move |a| {
         let s = d2.settings();
-        let on = if which == Which::ClaudeCode { s.claude_code.enabled } else { s.codex.enabled };
+        let on = which.config(&s).enabled;
         on && d2.spec_of(a).is_some_and(|x| x.can_use_external)
     })
 }
@@ -734,11 +735,16 @@ impl th_hive::LlmAdapter for CliAdapter {
     }
     fn stream(&self, req: &th_hive::LlmRequest, on: &mut dyn FnMut(th_llm::Delta), cancel: &std::sync::atomic::AtomicBool) -> Result<th_llm::Reply, th_llm::CallError> {
         let fail = |message: String, cancelled: bool| th_llm::CallError { message, status: Some(400), overflow: false, cancelled };
-        let which = if req.provider.base_url.ends_with("codex") { Which::Codex } else { Which::ClaudeCode };
+        let which = Which::of_provider(&req.provider.base_url);
         let settings = self.d.settings();
         let project = self.d.project();
-        let cfg = if which == Which::ClaudeCode { settings.claude_code.clone() } else { settings.codex.clone() };
+        let mut cfg = which.config(&settings);
         let agent = self.ctx.get::<AgentRegistry>(keys::AGENTS).and_then(|r| r.get(&req.session)).ok_or_else(|| fail(format!("no live agent for session {}", req.session), false))?;
+        // an agent that hands work to a team waits for it: the analysts alone may run 90 min,
+        // so the time limit of one coding job (30 min) would end the run before the reply
+        if self.d.spec_of(&agent).is_some_and(|s| s.can_delegate) {
+            cfg.timeout_min = cfg.timeout_min.max(180);
+        }
         let store = self.ctx.get::<SessionStore>(keys::SESSIONS).ok_or_else(|| fail("no session store".into(), false))?;
         let exe = std::env::current_exe().ok().filter(|e| e.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tellushive"))).ok_or_else(|| fail(format!("{} as a model needs the tellushive program to serve its tools", which.program()), false))?;
         let tools_sid = store.new_id(&format!("{}-tools", agent.preset.id));
@@ -780,7 +786,7 @@ impl Plugin for CliModels {
         "tellushive-cli-models".into()
     }
     fn describe(&self) -> String {
-        "providers claude-code and codex: the coding agent runs as the model, with this agent's tools over MCP".into()
+        "providers claude-code, codex and antigravity: the coding agent runs as the model, with this agent's tools over MCP".into()
     }
     fn inject(&self) -> Vec<&'static str> {
         vec![keys::LLM, keys::AGENTS, keys::SESSIONS, DOMAIN]
