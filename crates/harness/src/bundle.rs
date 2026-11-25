@@ -85,7 +85,7 @@ impl Plugin for DomainPlugin {
 // ------------------------------------------------------------------ built-in tools
 
 /// Tools that only read, so several may run at once.
-const READ_ONLY: [&str; 8] = ["list_standards", "search_standards", "get_clause", "list_design_modules", "list_files", "read_file", "read_skill", "describe_image"];
+const READ_ONLY: [&str; 9] = ["list_standards", "list_plugins", "search_standards", "get_clause", "list_design_modules", "list_files", "read_file", "read_skill", "describe_image"];
 
 struct BuiltinTools;
 
@@ -110,6 +110,9 @@ impl Plugin for BuiltinTools {
             let d = dom.clone();
             let name = spec.name.clone();
             let mut def = ToolDef::new(&spec.name, &spec.description, spec.parameters.clone(), move |t, args: Value| {
+                if crate::engine::SETUP_TOOLS.contains(&name.as_str()) {
+                    return d.setup_tool(&name, &args).map(|text| ToolOutput { text, ..Default::default() });
+                }
                 let (settings, project, skills) = (d.settings(), d.project(), d.skills());
                 let c = tools::Ctx { project: &project, library: &d.library, skills: &skills, settings: &settings, cancel: Some(&t.agent.cancel) };
                 let out = tools::exec_builtin(&c, &name, &args)?;
@@ -230,8 +233,8 @@ impl Plugin for McpTools {
             let settings = d.settings();
             let project = d.project();
             let mut found: Vec<(String, Vec<(String, String, String, Value)>)> = vec![];
-            for name in &spec.plugins {
-                let Some(cfg) = settings.plugins.iter().find(|p| &p.name == name && p.enabled) else { continue };
+            let all = spec.plugins.iter().any(|p| p == "*");
+            for cfg in settings.plugins.iter().filter(|p| p.enabled && (all || spec.plugins.contains(&p.name)) && project.info.allows_plugin(&p.name)) {
                 match d.plugins.ensure_for(&settings, &cfg.name, Some(&project.dir)) {
                     Ok(c) => found.push((cfg.name.clone(), c.tools.iter().map(|t| (t.name.clone(), tool_name(&cfg.name, &t.name), format!("[{}] {}", cfg.name, clip(&t.description, 1000)), t.input_schema.clone())).collect())),
                     Err(e) => {
@@ -453,7 +456,9 @@ impl Plugin for Prompt {
         ctx.effect(p.section(50, "programs", move |a, _| {
             let spec = dd.spec_of(a)?;
             let settings = dd.settings();
-            let plugs: Vec<&ServerConfig> = settings.plugins.iter().filter(|p| p.enabled && spec.plugins.contains(&p.name)).collect();
+            let info = dd.project().info;
+            let all = spec.plugins.iter().any(|p| p == "*");
+            let plugs: Vec<&ServerConfig> = settings.plugins.iter().filter(|p| p.enabled && (all || spec.plugins.contains(&p.name)) && info.allows_plugin(&p.name)).collect();
             if plugs.is_empty() {
                 return None;
             }
@@ -737,10 +742,13 @@ impl th_hive::LlmAdapter for CliAdapter {
         let store = self.ctx.get::<SessionStore>(keys::SESSIONS).ok_or_else(|| fail("no session store".into(), false))?;
         let exe = std::env::current_exe().ok().filter(|e| e.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tellushive"))).ok_or_else(|| fail(format!("{} as a model needs the tellushive program to serve its tools", which.program()), false))?;
         let tools_sid = store.new_id(&format!("{}-tools", agent.preset.id));
+        // the tool server runs the same team as this engine (a bot's team is not in teams/)
+        let team_file = project.dir.join("sessions").join(format!("{tools_sid}.team.json"));
+        crate::config::write_json(&team_file, &self.d.team(), false).map_err(|e| fail(format!("could not hand the team to the tool server: {e}"), false))?;
         let mcp = external::McpServer {
             name: "tellushive".into(),
             command: exe,
-            args: vec!["--mcp".into(), "--project".into(), project.dir.display().to_string(), "--agent".into(), agent.preset.id.clone(), "--session".into(), tools_sid.clone(), "--parent".into(), agent.id.clone(), "--depth".into(), agent.depth.to_string()],
+            args: vec!["--mcp".into(), "--project".into(), project.dir.display().to_string(), "--agent".into(), agent.preset.id.clone(), "--session".into(), tools_sid.clone(), "--parent".into(), agent.id.clone(), "--depth".into(), agent.depth.to_string(), "--team-file".into(), team_file.display().to_string()],
         };
         let prompt = cli_prompt(req, which.program(), &project.dir);
         let workdir = project.dir.join("work");
@@ -752,6 +760,7 @@ impl th_hive::LlmAdapter for CliAdapter {
         let r = external::run_job(which, &cfg, &external::Job { prompt: &prompt, workdir: &workdir, project: &project.dir, mcp: Some(mcp), model: &req.model, mcp_only: true }, cancel);
         done.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = follower.join();
+        let _ = std::fs::remove_file(&team_file);
         let out = r.map_err(|e| fail(format!("{}: {e}", which.program()), e == "cancelled"))?;
         if !out.ok {
             return Err(fail(format!("{} reported an error: {}", which.program(), clip(&out.text, 1500)), false));

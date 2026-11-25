@@ -622,7 +622,36 @@ impl TeamView {
     pub fn left(&mut self, ui: &mut egui::Ui, team: &mut TeamSpec, settings: &Settings, skills: &[Skill]) -> bool {
         let t = tokens(ui);
         let mut changed = false;
-        chrome::section(ui, &format!("Agents  ·  {}", team.agents.len()));
+        // the saved teams: pick one to edit, or make a new one
+        let teams = TeamSpec::list();
+        chrome::section(ui, &format!("Teams  ·  {}", teams.len()));
+        for tm in &teams {
+            let lead = tm.agents.iter().find(|a| a.id == tm.coordinator);
+            let colour = lead.map(|a| hex_color(&a.color, t.accent)).unwrap_or(t.accent);
+            let what = format!("{} agents", tm.agents.len());
+            if chrome::object_row(ui, colour, Some(Icon::Users), &tm.name, &what, tm.name == team.name).on_hover_text("Edit this team. Talk to it directly in Bots, or let a bot call it.").clicked() && tm.name != team.name {
+                let _ = team.save();
+                *team = TeamSpec::load(&tm.name);
+                self.selected = Some(team.coordinator.clone());
+                self.naming = None;
+                self.confirm_delete = false;
+                changed = true;
+            }
+        }
+        if chrome::ghost_button(ui, "+ New team").on_hover_text("A new team with only a team lead; add agents to it").clicked() {
+            let mut n = teams.len() + 1;
+            while TeamSpec::exists(&format!("Team {n}")) {
+                n += 1;
+            }
+            let _ = team.save();
+            *team = new_team(&format!("Team {n}"));
+            let _ = team.save();
+            self.selected = Some(team.coordinator.clone());
+            self.status = format!("Created '{}': rename it under More, and add agents", team.name);
+            changed = true;
+        }
+        ui.add_space(8.0);
+        chrome::section(ui, &format!("Agents of {}  ·  {}", team.name, team.agents.len()));
         let ids: Vec<String> = team.agents.iter().map(|a| a.id.clone()).collect();
         for id in ids {
             let Some(a) = team.agents.iter().find(|a| a.id == id) else { continue };

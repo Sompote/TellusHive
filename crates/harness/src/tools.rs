@@ -89,6 +89,22 @@ fn spec(name: &str, description: &str, parameters: Value) -> ToolSpec {
 pub fn builtin_specs() -> Vec<ToolSpec> {
     vec![
         spec("list_standards", "List the design standards in the library and which ones the engineer chose for this project.", json!({"type":"object","properties":{}})),
+        spec("list_plugins", "List the plugins (MCP programs: Tellus, Pondus, Aedifex, CADCraft and others) on this computer and which ones this project uses.", json!({"type":"object","properties":{}})),
+        spec(
+            "set_project_standards",
+            "Set up the project: choose the design standards it follows. The agents then search and cite only these. Use codes or ids from list_standards. Do this only when the engineer asks for it or agrees.",
+            json!({"type":"object","properties":{
+                "add":{"type":"array","items":{"type":"string"},"description":"Standard codes or ids to add, e.g. ['ACI 318-19', 'EN 1997-1']"},
+                "remove":{"type":"array","items":{"type":"string"},"description":"Standard codes or ids to remove"}}}),
+        ),
+        spec(
+            "set_project_plugins",
+            "Set up the project: choose the plugins (MCP programs) its agents may drive. Use names from list_plugins. The change applies from the next step. Do this only when the engineer asks for it or agrees.",
+            json!({"type":"object","properties":{
+                "add":{"type":"array","items":{"type":"string"},"description":"Plugin names to add, e.g. ['tellus', 'cadcraft']"},
+                "remove":{"type":"array","items":{"type":"string"},"description":"Plugin names to remove"},
+                "all":{"type":"boolean","description":"true = the project uses every plugin switched on in the app"}}}),
+        ),
         spec(
             "search_standards",
             "Search the standards library (vector + keyword search) for clauses relevant to a question. Searches the project's chosen standards unless `codes` names others. Cite the clause numbers you use.",
@@ -190,7 +206,7 @@ fn need_str<'a>(a: &'a Value, k: &str) -> Result<&'a str, String> {
 }
 
 /// Maps "ACI 318-19" or "aci-318-19" to a library id.
-fn resolve_standard(lib: &Library, code: &str) -> Option<String> {
+pub(crate) fn resolve_standard(lib: &Library, code: &str) -> Option<String> {
     let norm = |s: &str| s.to_ascii_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
     let n = norm(code);
     lib.list().into_iter().find(|m| norm(&m.id) == n || norm(&m.code) == n || norm(&m.name) == n).map(|m| m.id)

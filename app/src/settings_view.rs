@@ -164,7 +164,7 @@ impl SettingsView {
                     .on_hover_text(if p.is_vllm() {
                         "Switched through the model's chat template (Qwen3, DeepSeek V3.1: on or off) and reasoning_effort (gpt-oss). Start vLLM with --reasoning-parser <parser> to see the thinking apart from the reply."
                     } else if p.base_url.contains("openrouter.ai") {
-                        "How long the models think before each reply, for agents whose own Thinking is 'provider default'. Low keeps replies quick; raise it for hard design checks, or set it per agent in step 3 Team."
+                        "How long the models think before each reply, for agents whose own Thinking is 'provider default'. Low keeps replies quick; raise it for hard design checks, or set it per agent in the Team layer."
                     } else {
                         "Sent through OpenRouter's reasoning setting, so it applies only to OpenRouter; this provider's API does not take it."
                     });
@@ -361,7 +361,7 @@ impl SettingsView {
                         r = th_harness::skills::install(&p, &own, true).map(|k| th_harness::skills::Skill { name: format!("{} (replaced)", k.name), ..k });
                     }
                     self.skill_msg = match r {
-                        Ok(k) => format!("Added '{}'. Equip it to agents in step 3 Team, or leave their skills on 'all'.", k.name),
+                        Ok(k) => format!("Added '{}'. Equip it to agents in the Team layer, or leave their skills on 'all'.", k.name),
                         Err(e) => format!("Not added: {e}"),
                     };
                     changed = true;

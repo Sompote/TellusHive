@@ -15,6 +15,7 @@ use th_harness::{Artifact, ArtifactKind, Engine, PluginState, Plugins, Project, 
 use eframe::egui::{self, Color32, RichText};
 use serde::{Deserialize, Serialize};
 
+use crate::bots::BotsView;
 use crate::chat::ChatView;
 use crate::chrome::{self, hex_color};
 use crate::icons::{self, Icon};
@@ -52,6 +53,7 @@ pub fn default_project(settings: &Settings) -> Result<Project, String> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ws {
     Home,
+    Bots,
     Project,
     Standards,
     Team,
@@ -62,10 +64,12 @@ pub enum Ws {
 }
 
 impl Ws {
-    const STEPS: [Ws; 4] = [Ws::Project, Ws::Standards, Ws::Team, Ws::Plugins];
+    /// The layers, top to bottom: who you talk to, who does the work, what it works on.
+    const LAYERS: [(Ws, Icon, &'static str); 3] = [(Ws::Bots, Icon::Chat, "Bots"), (Ws::Team, Icon::Users, "Team"), (Ws::Project, Icon::Folder, "Project")];
     fn title(self) -> &'static str {
         match self {
             Ws::Home => "Home",
+            Ws::Bots => "Bots",
             Ws::Project => "Project",
             Ws::Standards => "Standards",
             Ws::Team => "Team",
@@ -75,15 +79,29 @@ impl Ws {
             Ws::Settings => "Settings",
         }
     }
-    fn number(self) -> Option<usize> {
-        Ws::STEPS.iter().position(|s| *s == self).map(|i| i + 1)
+    /// The layer a workspace belongs to: Standards is part of the project, Plugins part of
+    /// the team, and the Design office chat is one of the bots.
+    fn layer(self) -> Ws {
+        match self {
+            Ws::Standards => Ws::Project,
+            Ws::Plugins => Ws::Project,
+            Ws::Design => Ws::Bots,
+            w => w,
+        }
+    }
+    /// The tabs inside a layer's panel.
+    fn tabs(self) -> &'static [(Ws, &'static str)] {
+        match self.layer() {
+            Ws::Project => &[(Ws::Project, "Details"), (Ws::Standards, "Standards"), (Ws::Plugins, "Plugins")],
+            _ => &[],
+        }
     }
     fn about(self) -> &'static str {
         match self {
-            Ws::Project => "What the project is and the notes every agent reads.",
-            Ws::Standards => "The design standards the agents follow and cite, from your library.",
-            Ws::Team => "The agents of the design office: their roles, models, skills and plugins.",
-            Ws::Plugins => "Programs the agents drive through MCP: the Tellus family, Pondus, Aedifex, Granum, ContinuaX, CADCraft.",
+            Ws::Project => "What the bots and teams work on: the project, its notes, the standards it follows and the programs it uses.",
+            Ws::Standards => "The standards this project follows. The agents search only these and cite their clauses.",
+            Ws::Team => "A team a bot can call: its coordinator leads it, like another bot, and the agents do the work.",
+            Ws::Plugins => "The programs this project's agents drive through MCP: the Tellus family, Pondus, Aedifex, Granum, ContinuaX, CADCraft.",
             _ => "",
         }
     }
@@ -92,17 +110,8 @@ impl Ws {
             Ws::Project => "Each project is a folder with its attachments, calculations, drawings and reports. The description and notes are added to every agent's instructions: put the client, the site, the units and any office rule here.",
             Ws::Standards => "Import your own copies of the standards (PDF, text or Markdown) into the library once; then switch on the ones this project follows. Agents search only the chosen standards and cite clause numbers from what they find. Office rules can be added as notes.",
             Ws::Team => "The coordinator talks with you and delegates to the others along the arrows. Each agent has its own instructions, model, built-in tools, skills (folders with SKILL.md) and plugins. Changes are saved automatically.",
-            Ws::Plugins => "A plugin is an MCP server: a program started with arguments (stdio) or an HTTP endpoint. Equip agents with plugins in the Team step. Tellus, Tellus3D and CADCraft are found automatically.",
+            Ws::Plugins => "A plugin is an MCP server: a program started with arguments (stdio) or an HTTP endpoint. Equip agents with plugins in the Team layer, and a bot's own plugins in its profile. Tellus, Tellus3D and CADCraft are found automatically.",
             _ => "",
-        }
-    }
-    fn next(self) -> Option<Ws> {
-        match self {
-            Ws::Project => Some(Ws::Standards),
-            Ws::Standards => Some(Ws::Team),
-            Ws::Team => Some(Ws::Plugins),
-            Ws::Plugins => Some(Ws::Design),
-            _ => None,
         }
     }
 }
@@ -115,6 +124,8 @@ pub struct App {
     ws: Ws,
     chat: ChatView,
     chat_open: bool,
+    /// The Bots workspace: bots with their own picture, character and conversation.
+    bots: BotsView,
     viewer: Viewer,
     team_view: TeamView,
     std_view: StandardsView,
@@ -143,7 +154,7 @@ pub struct App {
     shot: Option<(PathBuf, usize, u32)>,
 }
 
-const SHOT_ORDER: [Ws; 8] = [Ws::Home, Ws::Project, Ws::Standards, Ws::Team, Ws::Plugins, Ws::Design, Ws::Output, Ws::Settings];
+const SHOT_ORDER: [Ws; 9] = [Ws::Home, Ws::Bots, Ws::Project, Ws::Standards, Ws::Team, Ws::Plugins, Ws::Design, Ws::Output, Ws::Settings];
 
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Result<App, String> {
@@ -162,10 +173,11 @@ impl App {
         let project = default_project(&settings)?;
         let team = TeamSpec::load(&project.info.team);
         let engine = Arc::new(Engine::new(settings.clone(), team.clone(), project.clone(), library, Arc::new(Plugins::default())));
+        engine.use_team_chat();
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, if settings.dark { Tokens::DARK } else { Tokens::LIGHT });
         icons::install(&cc.egui_ctx);
-        let mut chat = ChatView::new(ChatView::load(&project.dir));
+        let mut chat = ChatView::for_team(&project.dir, &team.name);
         if std::env::var("TELLUSHIVE_SHOT_BUSY").is_ok() {
             chat.demo_busy(&team.agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>());
         }
@@ -182,6 +194,7 @@ impl App {
             ws: if had_project { Ws::Design } else { Ws::Home },
             chat,
             chat_open: false,
+            bots: BotsView::default(),
             viewer: Viewer::default(),
             team_view: TeamView::default(),
             std_view: StandardsView::default(),
@@ -224,7 +237,8 @@ impl App {
         if let Ok(mut e) = self.engine.team.write() {
             *e = self.team.clone();
         }
-        self.chat = ChatView::new(ChatView::load(&self.project.dir));
+        self.engine.use_team_chat();
+        self.chat = ChatView::for_team(&self.project.dir, &self.team.name);
         self.tpl_name = self.project.info.name.clone();
         self.viewer = Viewer::default();
         self.artifacts = self.project.artifacts();
@@ -321,6 +335,7 @@ impl App {
         if let Ok(mut s) = self.engine.settings.write() {
             *s = self.settings.clone();
         }
+        self.bots.sync_settings(&self.settings);
         if skills_changed {
             self.engine.rescan_skills();
         }
@@ -332,6 +347,44 @@ impl App {
             p.info = self.project.info.clone();
         }
         self.project_dirty = Some(Instant::now());
+    }
+
+    /// Talks to another saved team in the open project: its agents and its own conversation.
+    /// The project remembers it as its team.
+    fn select_team(&mut self, name: &str) {
+        if name == self.team.name {
+            return;
+        }
+        if self.chat.busy() {
+            self.status = format!("{} is working: stop it before switching teams.", self.team.name);
+            return;
+        }
+        self.chat.save(&self.project.dir);
+        if self.team_dirty.is_some() {
+            let _ = self.team.save();
+            self.team_dirty = None;
+        }
+        self.team = TeamSpec::load(name);
+        self.team_view.selected = Some(self.team.coordinator.clone());
+        self.adopt_team();
+    }
+
+    /// After the team changed (picked, created, renamed): the engine, the project and the
+    /// chat follow it.
+    fn adopt_team(&mut self) {
+        if let Ok(mut e) = self.engine.team.write() {
+            *e = self.team.clone();
+        }
+        if self.project.info.team != self.team.name {
+            self.project.info.team = self.team.name.clone();
+            self.apply_project();
+        }
+        self.engine.use_team_chat();
+        let file = th_harness::engine::team_chat_file(&self.team.name);
+        if self.chat.file != file && !self.chat.busy() {
+            self.chat.save(&self.project.dir);
+            self.chat = ChatView::for_team(&self.project.dir, &self.team.name);
+        }
     }
 
     fn agent_colours(&self) -> Vec<(String, Color32)> {
@@ -414,24 +467,33 @@ impl App {
                 ui.painter().add(egui::Shape::line(vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(0.0, 2.0), c + egui::vec2(4.0, -2.0)], egui::Stroke::new(1.5_f32, t.text_dim)));
                 ui.add_space(20.0);
 
-                // the workflow, centred
+                // the layers, centred: Bots › Team › Project, then Output
                 let font = egui::FontId::proportional(13.0);
-                let labels: f32 = Ws::STEPS.iter().map(|s| s.title()).chain(["Output", "Design office"]).map(|l| ui.fonts(|f| f.layout_no_wrap(l.to_string(), font.clone(), t.text).size().x)).sum();
+                let labels: f32 = ["Bots", "Team", "Project", "Output"].iter().map(|l| ui.fonts(|f| f.layout_no_wrap(l.to_string(), font.clone(), t.text).size().x)).sum();
                 let busy_w = if self.chat.busy() { 190.0 } else { 0.0 };
-                let strip_w = labels + 6.0 * 50.0 + 2.0 * 13.0 + 24.0 + busy_w;
-                let right_w = 240.0;
+                let strip_w = labels + 4.0 * 50.0 + 2.0 * 22.0 + 13.0 + 24.0 + busy_w;
+                let right_w = 200.0;
                 ui.add_space(((ui.available_width() - right_w - strip_w) / 2.0).max(8.0));
+                let layer = self.ws.layer();
                 chrome::segmented_frame(ctx).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    for step in Ws::STEPS {
-                        let state = if self.ws == step { chrome::StepState::Current } else if step == Ws::Standards && self.project.info.standards.is_empty() { chrome::StepState::Attention } else { chrome::StepState::Todo };
-                        let r = chrome::step_button(ui, step.number(), None, step.title(), state);
-                        let r = if state == chrome::StepState::Attention { r.on_hover_text("No standard chosen for this project yet") } else { r };
-                        if r.clicked() {
-                            self.ws = step;
-                            if step == Ws::Standards {
-                                self.std_view.refresh();
+                    for (k, (ws, icon, label)) in Ws::LAYERS.into_iter().enumerate() {
+                        if k > 0 {
+                            ui.label(RichText::new("›").size(15.0).color(t.text_faint));
+                        }
+                        let attention = ws == Ws::Project && self.project.info.standards.is_empty();
+                        let state = if layer == ws { chrome::StepState::Current } else if attention { chrome::StepState::Attention } else { chrome::StepState::Todo };
+                        let tip = match ws {
+                            Ws::Bots => {
+                                let n = self.bots.busy_count() + usize::from(self.chat.busy());
+                                if n > 0 { format!("Your project managers: {n} working now") } else { "Your project managers: the design office and your own bots".to_string() }
                             }
+                            Ws::Team => format!("Teams the bots call: {} ({} agents)", self.team.name, self.team.agents.len()),
+                            _ if attention => format!("What they work on: {} (no standard chosen yet)", self.project.info.name),
+                            _ => format!("What they work on: {}", self.project.info.name),
+                        };
+                        if chrome::step_button(ui, None, Some(icon), label, state).on_hover_text(tip).clicked() && layer != ws {
+                            self.ws = ws;
                         }
                     }
                     chrome::strip_divider(ui);
@@ -442,26 +504,16 @@ impl App {
                         let secs = self.chat.busy_since.map(|b| b.elapsed().as_secs()).unwrap_or(0);
                         ui.label(RichText::new(self.chat.current_agent()).font(medium_font(13.0)));
                         ui.label(RichText::new(format!("{}:{:02}", secs / 60, secs % 60)).monospace().color(t.text_dim));
-                        let (_, tp, tc) = self.chat.run_usage.totals();
-                        if tp + tc > 0 && self.chat.saved.details {
-                            ui.label(RichText::new(format!("{} tokens", crate::chat::fmt_tokens(tp + tc))).monospace().color(t.text_dim)).on_hover_text(self.chat.run_usage.table());
-                        }
                         if ui.add(egui::Button::new(RichText::new("Stop").color(t.error)).frame(false)).on_hover_text("Stops the agents now, including a running program calculation or script").clicked() {
                             self.chat.stop();
                         }
                         if ui.add(egui::Button::new("Watch").frame(false)).clicked() {
                             self.ws = Ws::Design;
                         }
-                    } else {
-                        let on = self.ws == Ws::Design;
-                        let b = chrome::primary_button("Design office").fill(if on { t.accent } else { t.accent.gamma_multiply(0.92) });
-                        if ui.add(b).on_hover_text("Talk with the coordinator and its team").clicked() {
-                            self.ws = Ws::Design;
-                        }
+                        chrome::strip_divider(ui);
                     }
-                    chrome::strip_divider(ui);
                     let state = if self.ws == Ws::Output { chrome::StepState::Current } else { chrome::StepState::Todo };
-                    if chrome::step_button(ui, None, Some(Icon::FileText), "Output", state).on_hover_text("Calculations, drawings and reports").clicked() {
+                    if chrome::step_button(ui, None, Some(Icon::FileText), "Output", state).on_hover_text("Calculations, drawings and reports of the project").clicked() {
                         self.ws = Ws::Output;
                     }
                 });
@@ -475,7 +527,7 @@ impl App {
                     if icons::button(ui, Icon::Settings, "Settings", self.ws == Ws::Settings).clicked() {
                         self.ws = if self.ws == Ws::Settings { Ws::Design } else { Ws::Settings };
                     }
-                    if self.ws != Ws::Design {
+                    if self.ws.layer() != Ws::Bots {
                         let label = if self.chat_open { "Close assistant" } else { "Assistant" };
                         if chrome::assistant_button(ui, label).on_hover_text("The design office's coordinator, beside any step").clicked() {
                             self.chat_open = !self.chat_open;
@@ -522,7 +574,8 @@ impl App {
 
     // ---------------------------------------------------------------- step panel
 
-    /// The left panel of a step: title, "Step n of 4", help, about, the body, "Next".
+    /// The left panel of a layer: its title, its tabs (Details / Standards, Agents /
+    /// Plugins), help, about and the body.
     fn step_panel(&mut self, ctx: &egui::Context, body: impl FnOnce(&mut Self, &mut egui::Ui)) {
         let t = Tokens::get(ctx);
         let ws = self.ws;
@@ -530,9 +583,14 @@ impl App {
         egui::SidePanel::left("steps").resizable(true).default_width(400.0).min_width(330.0).frame(egui::Frame::NONE.fill(t.chrome).stroke(edge)).show(ctx, |ui| {
             egui::TopBottomPanel::top("step_head").frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 20, right: 16, top: 18, bottom: 8 })).show_separator_line(false).show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(ws.title()).font(medium_font(17.0)));
-                    if let Some(n) = ws.number() {
-                        ui.label(RichText::new(format!("Step {n} of 4")).size(12.0).color(t.text_faint));
+                    let name = match ws.layer() {
+                        Ws::Project => self.project.info.name.clone(),
+                        Ws::Team => self.team.name.clone(),
+                        _ => String::new(),
+                    };
+                    ui.label(RichText::new(ws.layer().title()).font(medium_font(17.0)));
+                    if !name.is_empty() {
+                        ui.label(RichText::new(name).size(13.0).color(t.text_dim));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !ws.help().is_empty() {
@@ -540,27 +598,24 @@ impl App {
                         }
                     });
                 });
+                let tabs = ws.tabs();
+                if !tabs.is_empty() {
+                    ui.add_space(6.0);
+                    let labels: Vec<&str> = tabs.iter().map(|(_, l)| *l).collect();
+                    let mut cur = tabs.iter().position(|(w, _)| *w == ws).unwrap_or(0);
+                    chrome::segmented(ui, &labels, &mut cur);
+                    if tabs[cur].0 != ws {
+                        self.ws = tabs[cur].0;
+                        if self.ws == Ws::Standards {
+                            self.std_view.refresh();
+                        }
+                    }
+                    ui.add_space(4.0);
+                }
                 if !ws.about().is_empty() {
                     ui.label(RichText::new(ws.about()).size(12.5).color(t.text_dim));
                 }
             });
-            if let Some(next) = ws.next() {
-                egui::TopBottomPanel::bottom("step_next").frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(20, 10))).show_separator_line(true).show_inside(ui, |ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let clicked = if next == Ws::Design {
-                            ui.add(chrome::primary_button("Design office →").fill(t.accent)).clicked()
-                        } else {
-                            ui.add(egui::Button::new(RichText::new(format!("Next: {} →", next.title())).font(medium_font(13.0))).min_size(egui::vec2(0.0, 32.0)).corner_radius(8)).clicked()
-                        };
-                        if clicked {
-                            self.ws = next;
-                            if next == Ws::Standards {
-                                self.std_view.refresh();
-                            }
-                        }
-                    });
-                });
-            }
             egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 20, right: 14, top: 0, bottom: 8 })).show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| body(self, ui));
             });
@@ -654,10 +709,10 @@ impl App {
             let ready = self.settings.plugins.iter().filter(|p| p.enabled).count();
             let counts = |k: ArtifactKind| self.artifacts.iter().filter(|a| a.kind == k).count();
             let cards: [(Ws, Icon, String, String); 5] = [
-                (Ws::Standards, Icon::Library, "Standards".into(), if chosen.is_empty() { "None chosen yet".into() } else { chosen.join(", ") }),
+                (Ws::Design, Icon::Chat, "Bots".into(), format!("Design office: {} messages · {} own bots", self.chat.saved.entries.iter().filter(|e| matches!(e, crate::chat::Entry::User { .. })).count(), self.bots.bots.len())),
                 (Ws::Team, Icon::Users, "Team".into(), format!("{}: {}", self.team.name, self.team.agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "))),
-                (Ws::Plugins, Icon::Plug, "Plugins".into(), format!("{ready} available: {}", self.settings.plugins.iter().filter(|p| p.enabled).map(|p| p.name.clone()).collect::<Vec<_>>().join(", "))),
-                (Ws::Design, Icon::Chat, "Design office".into(), format!("{} messages in the conversation", self.chat.saved.entries.iter().filter(|e| matches!(e, crate::chat::Entry::User { .. })).count())),
+                (Ws::Plugins, Icon::Plug, "Project · Plugins".into(), format!("{ready} available: {}", self.settings.plugins.iter().filter(|p| p.enabled).map(|p| p.name.clone()).collect::<Vec<_>>().join(", "))),
+                (Ws::Standards, Icon::Library, "Project · Standards".into(), if chosen.is_empty() { "None chosen yet".into() } else { chosen.join(", ") }),
                 (Ws::Output, Icon::FileText, "Output".into(), format!("{} calculations · {} drawings · {} reports", counts(ArtifactKind::Calculation), counts(ArtifactKind::Drawing), counts(ArtifactKind::Report))),
             ];
             let w = 300.0;
@@ -713,6 +768,7 @@ impl App {
     fn team_ws(&mut self, ctx: &egui::Context) {
         let skills = self.engine.skills.read().map(|s| s.clone()).unwrap_or_default();
         let mut changed = false;
+        let before = self.team.name.clone();
         self.step_panel(ctx, |app, ui| {
             let settings = app.settings.clone();
             changed |= app.team_view.left(ui, &mut app.team, &settings, &skills);
@@ -721,13 +777,21 @@ impl App {
             changed |= self.team_view.canvas(ui, &mut self.team, &self.settings);
         });
         if changed {
-            if let Ok(mut e) = self.engine.team.write() {
-                *e = self.team.clone();
+            if before != self.team.name && !TeamSpec::exists(&before) && !self.chat.busy() {
+                // renamed: the team keeps its conversation
+                let dir = &self.project.dir;
+                let (of, nf) = (dir.join(th_harness::engine::team_chat_file(&before)), dir.join(th_harness::engine::team_chat_file(&self.team.name)));
+                if of.is_file() && !nf.exists() {
+                    self.chat.save(dir);
+                    let _ = std::fs::rename(&of, &nf);
+                    self.chat.file = th_harness::engine::team_chat_file(&self.team.name);
+                }
+                let (ok, nk) = (dir.join("sessions").join(th_harness::engine::team_chat_key(&before)), dir.join("sessions").join(th_harness::engine::team_chat_key(&self.team.name)));
+                if ok.is_file() && !nk.exists() {
+                    let _ = std::fs::rename(ok, nk);
+                }
             }
-            if self.project.info.team != self.team.name {
-                self.project.info.team = self.team.name.clone();
-                self.apply_project();
-            }
+            self.adopt_team();
             self.team_dirty = Some(Instant::now());
         }
     }
@@ -891,9 +955,9 @@ impl App {
         let t = Tokens::get(ctx);
         let edge = egui::Stroke::new(1.0_f32, t.separator);
         egui::SidePanel::left("deliverables").resizable(true).default_width(300.0).min_width(240.0).frame(egui::Frame::NONE.fill(t.chrome).stroke(edge).inner_margin(egui::Margin { left: 16, right: 12, top: 18, bottom: 8 })).show(ctx, |ui| {
-            ui.label(RichText::new("Design office").font(medium_font(17.0)));
+            ui.label(RichText::new(&self.team.name).font(medium_font(17.0)));
             let std = if self.project.info.standards.is_empty() { "no standard chosen".to_string() } else { format!("{} standards", self.project.info.standards.len()) };
-            ui.label(RichText::new(format!("{} · {std}", self.team.name)).size(12.5).color(t.text_dim));
+            ui.label(RichText::new(format!("Team chat on {} · {std}", self.project.info.name)).size(12.5).color(t.text_dim));
             ui.add_space(6.0);
             let working = self.chat.live.iter().filter(|l| !l.waiting).count();
             ui.horizontal(|ui| {
@@ -977,6 +1041,9 @@ impl App {
             ui.add_space(24.0);
             ui.spacing_mut().item_spacing.y = 2.0;
             rail_button(ui, Icon::Home, "Home", true);
+            if rail_button(ui, Icon::Chat, "Bots", false).on_hover_text("Talk to your bots: on a team or on their own").clicked() {
+                self.ws = Ws::Bots;
+            }
             if rail_button(ui, Icon::Plus, "New project", false).clicked() {
                 let n = format!("Project {}", th_harness::tools::today());
                 if let Err(e) = self.new_project_named(&n) {
@@ -1406,8 +1473,27 @@ impl eframe::App for App {
                 self.open_model_window(&plugin, false);
             }
         }
+        self.bots.poll_all();
+        if let Some(dir) = self.bots.project_edited.take() {
+            // a bot set up the open project with its standards and plugins
+            if dir == self.project.dir {
+                if let Ok(p) = Project::open(&dir) {
+                    self.project.info = p.info;
+                    self.apply_project();
+                    self.project_dirty = None;
+                }
+            }
+        }
         if self.chat.poll() {
             self.chat.save(&self.project.dir);
+            // the coordinator may have set the project up (standards, plugins) from the chat
+            if let Ok(p) = Project::open(&self.project.dir) {
+                if p.info.standards != self.project.info.standards || p.info.plugins != self.project.info.plugins {
+                    self.project.info.standards = p.info.standards;
+                    self.project.info.plugins = p.info.plugins;
+                    self.apply_project();
+                }
+            }
             self.artifacts = self.project.artifacts();
             // the other programs show the finished model; an open window is left alone
             for plugin in std::mem::take(&mut self.run_models) {
@@ -1440,9 +1526,13 @@ impl eframe::App for App {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() {
             for p in dropped {
-                self.chat.add_attachment(p);
+                if self.ws == Ws::Bots {
+                    self.bots.add_attachment(p);
+                } else {
+                    self.chat.add_attachment(p);
+                }
             }
-            if self.ws != Ws::Design {
+            if self.ws.layer() != Ws::Bots {
                 self.chat_open = true;
             }
         }
@@ -1451,13 +1541,18 @@ impl eframe::App for App {
             theme::apply(ctx, if self.settings.dark { Tokens::DARK } else { Tokens::LIGHT });
         }
 
+        if self.ws == Ws::Design {
+            // the design office chat is the first entry of the Bots rail
+            self.ws = Ws::Bots;
+            self.bots.office = true;
+        }
         if self.ws == Ws::Home {
             self.home_ws(ctx);
         } else {
             self.top_bar(ctx);
             self.status_bar(ctx);
             // the assistant docked on the right of any step
-            if self.chat_open && self.ws != Ws::Design {
+            if self.chat_open && self.ws.layer() != Ws::Bots {
                 let t = Tokens::get(ctx);
                 let max_w = (ctx.screen_rect().width() * 0.42).max(320.0);
                 egui::SidePanel::right("assistant").resizable(true).default_width(420.0).min_width(300.0).max_width(max_w).frame(chrome::dock_frame(ctx)).show(ctx, |ui| {
@@ -1484,7 +1579,19 @@ impl eframe::App for App {
                 Ws::Standards => self.standards_ws(ctx),
                 Ws::Team => self.team_ws(ctx),
                 Ws::Plugins => self.plugins_ws(ctx),
-                Ws::Design => self.design_ws(ctx),
+                Ws::Design | Ws::Bots => {
+                    let skills = self.engine.skills.read().map(|s| s.clone()).unwrap_or_default();
+                    let engine = self.engine.clone();
+                    let dir = self.project.dir.clone();
+                    let office = crate::bots::Office { team: self.team.name.clone(), project: self.project.info.name.clone(), busy: self.chat.busy() };
+                    let show = self.bots.ui(ctx, &engine, &self.settings, &skills, &dir, &office);
+                    if let Some(name) = self.bots.pick_team.take() {
+                        self.select_team(&name);
+                    }
+                    if show {
+                        self.design_ws(ctx);
+                    }
+                }
                 Ws::Output => self.output_ws(ctx),
                 Ws::Settings => self.settings_ws(ctx),
                 Ws::Home => {}
@@ -1497,6 +1604,8 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.bots.stop_all();
+        self.bots.save_all();
         self.chat.stop();
         self.flush(true);
         self.chat.save(&self.project.dir);

@@ -9,6 +9,7 @@
 //! ```
 
 mod app;
+mod bots;
 mod chat;
 mod chrome;
 mod icons;
@@ -48,6 +49,7 @@ fn main() {
             session: arg_value(&args, "--session"),
             parent: arg_value(&args, "--parent"),
             depth: arg_value(&args, "--depth").and_then(|d| d.parse().ok()).unwrap_or(0),
+            team_file: arg_value(&args, "--team-file").map(PathBuf::from),
         };
         if let Err(e) = th_harness::serve_mcp_with(&dir, &opt) {
             eprintln!("tellushive --mcp: {e}");
@@ -131,7 +133,10 @@ fn run_headless(args: &[String]) -> i32 {
     let team = th_harness::TeamSpec::load(&project.info.team);
     let dir = project.dir.clone();
     let engine = th_harness::Engine::new(settings, team, project, library, Arc::new(th_harness::Plugins::default()));
-    let mut saved = chat::ChatView::load(&dir);
+    // the same conversation as the window's for this project's team
+    engine.use_team_chat();
+    let chat_file = th_harness::engine::team_chat_file(&engine.domain.team().name);
+    let mut saved = chat::ChatView::load_file(&dir, &chat_file);
     let (tx, rx) = std::sync::mpsc::channel();
     let printer = std::thread::spawn(move || {
         use th_harness::Event::*;
@@ -170,7 +175,7 @@ fn run_headless(args: &[String]) -> i32 {
         saved.entries.push(chat::Entry::Usage { report: usage });
     }
     if let Ok(s) = serde_json::to_string(&saved) {
-        let _ = std::fs::write(dir.join("chat.json"), s);
+        let _ = std::fs::write(dir.join(&chat_file), s);
     }
     match r {
         Ok(_) => 0,

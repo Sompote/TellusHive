@@ -181,6 +181,13 @@ pub struct Domain {
 
 pub const DOMAIN: &str = "tellushive";
 
+/// The tools that set the project up (they change the project, so they run on the domain).
+pub const SETUP_TOOLS: [&str; 3] = ["list_plugins", "set_project_standards", "set_project_plugins"];
+
+fn str_list(a: &Value, key: &str) -> Vec<String> {
+    a.get(key).and_then(|v| v.as_array()).map(|l| l.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default()
+}
+
 impl Domain {
     pub fn send(&self, e: Event) {
         if let Some(tx) = self.ui.lock().ok().and_then(|u| u.clone()) {
@@ -199,6 +206,100 @@ impl Domain {
     pub fn skills(&self) -> Vec<Skill> {
         self.skills.read().map(|s| s.clone()).unwrap_or_default()
     }
+    /// Runs a project set-up tool: lists the plugins, or changes the project's standards or
+    /// plugins, saves project.json and updates the project every agent sees.
+    pub fn setup_tool(&self, name: &str, a: &Value) -> Result<String, String> {
+        let settings = self.settings();
+        let mut project = self.project();
+        let enabled: Vec<&ServerConfig> = settings.plugins.iter().filter(|p| p.enabled).collect();
+        let plugin_lines = |info: &crate::project::ProjectInfo| {
+            let mut s = String::new();
+            for p in &settings.plugins {
+                let mark = if !p.enabled { "-" } else if info.allows_plugin(&p.name) { "*" } else { " " };
+                let off = if p.enabled { "" } else { " (switched off in the app; the engineer turns it on under Project › Plugins)" };
+                s.push_str(&format!("{mark} {}: {}{off}\n", p.name, crate::project::clip(&p.description, 160)));
+            }
+            s
+        };
+        match name {
+            "list_plugins" => {
+                if settings.plugins.is_empty() {
+                    return Ok("No plugins are set up in the app.".into());
+                }
+                let scope = if project.info.plugins.is_none() { "This project uses every plugin that is switched on." } else { "This project uses the plugins marked *." };
+                Ok(format!("Plugins (* = used by this project, - = switched off in the app):\n{}\n{scope}", plugin_lines(&project.info)))
+            }
+            "set_project_standards" => {
+                let (add, remove) = (str_list(a, "add"), str_list(a, "remove"));
+                if add.is_empty() && remove.is_empty() {
+                    return Err("give `add` or `remove`".into());
+                }
+                let mut unknown = vec![];
+                for c in &add {
+                    match tools::resolve_standard(&self.library, c) {
+                        Some(id) if !project.info.standards.contains(&id) => project.info.standards.push(id),
+                        Some(_) => {}
+                        None => unknown.push(c.clone()),
+                    }
+                }
+                for c in &remove {
+                    match tools::resolve_standard(&self.library, c) {
+                        Some(id) => project.info.standards.retain(|x| *x != id),
+                        None => unknown.push(c.clone()),
+                    }
+                }
+                if !unknown.is_empty() {
+                    let have: Vec<String> = self.library.list().iter().map(|m| m.code.clone()).collect();
+                    return Err(format!("not in the standards library: {}. The library holds: {}. Nothing was changed.", unknown.join(", "), if have.is_empty() { "nothing (the engineer imports standards under Project › Standards)".into() } else { have.join(", ") }));
+                }
+                self.save_project(&project)?;
+                let lib = self.library.list();
+                let chosen: Vec<String> = lib.iter().filter(|m| project.info.standards.contains(&m.id)).map(|m| m.code.clone()).collect();
+                Ok(if chosen.is_empty() { "The project now follows no standard; searches cover the whole library.".into() } else { format!("The project now follows: {}.", chosen.join(", ")) })
+            }
+            "set_project_plugins" => {
+                let (add, remove) = (str_list(a, "add"), str_list(a, "remove"));
+                let all = a.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+                if !all && add.is_empty() && remove.is_empty() {
+                    return Err("give `add`, `remove` or `all`".into());
+                }
+                let find = |n: &str| settings.plugins.iter().find(|p| p.name.eq_ignore_ascii_case(n));
+                let unknown: Vec<String> = add.iter().chain(&remove).filter(|n| find(n).is_none()).cloned().collect();
+                if !unknown.is_empty() {
+                    return Err(format!("no plugin named {}. The plugins are: {}. Nothing was changed.", unknown.join(", "), settings.plugins.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ")));
+                }
+                let mut list: Vec<String> = project.info.plugins.clone().unwrap_or_else(|| enabled.iter().map(|p| p.name.clone()).collect());
+                for n in &add {
+                    let n = find(n).map(|p| p.name.clone()).unwrap_or_default();
+                    if !list.contains(&n) {
+                        list.push(n);
+                    }
+                }
+                for n in &remove {
+                    let n = find(n).map(|p| p.name.clone()).unwrap_or_default();
+                    list.retain(|x| *x != n);
+                }
+                project.info.plugins = if all { None } else { Some(list) };
+                self.save_project(&project)?;
+                let off: Vec<String> = add.iter().filter_map(|n| find(n)).filter(|p| !p.enabled).map(|p| p.name.clone()).collect();
+                let mut s = format!("Plugins of the project now (applies from the next step):\n{}", plugin_lines(&project.info));
+                if !off.is_empty() {
+                    s.push_str(&format!("\n{} is switched off in the app, so it stays unavailable until the engineer turns it on under Project › Plugins.", off.join(", ")));
+                }
+                Ok(s)
+            }
+            _ => Err(format!("unknown set-up tool {name}")),
+        }
+    }
+
+    fn save_project(&self, p: &Project) -> Result<(), String> {
+        p.save()?;
+        if let Ok(mut cur) = self.project.write() {
+            cur.info = p.info.clone();
+        }
+        Ok(())
+    }
+
     /// The team member an agent runs as.
     pub fn spec_of(&self, a: &th_hive::Agent) -> Option<AgentSpec> {
         self.team().agent(&a.preset.id).cloned()
@@ -303,10 +404,33 @@ pub struct Engine {
     pub skills: Arc<RwLock<Vec<Skill>>>,
     pub domain: Arc<Domain>,
     pub hive: Hive,
+    /// The file in sessions/ that names the coordinator session the chat continues
+    /// ("current", or "team-<name>" when each team keeps its own conversation).
+    pub chat_key: RwLock<String>,
 }
 
-/// The file that names the coordinator session the chat continues.
-const CURRENT: &str = "sessions/current";
+/// The conversation key of a team in a project: each team keeps its own.
+pub fn team_chat_key(team: &str) -> String {
+    format!("team-{}", crate::project::slug(team).to_lowercase())
+}
+
+/// The chat transcript file of a team in a project.
+pub fn team_chat_file(team: &str) -> String {
+    format!("chat-{}.json", team_chat_key(team))
+}
+
+/// Moves a project's single conversation (from before each team had its own) to the team
+/// the project used, once.
+pub fn adopt_legacy_chat(dir: &Path, team: &str) {
+    let file = dir.join(team_chat_file(team));
+    if !file.exists() && dir.join("chat.json").is_file() {
+        let _ = std::fs::rename(dir.join("chat.json"), &file);
+    }
+    let key = dir.join("sessions").join(team_chat_key(team));
+    if !key.exists() && dir.join("sessions/current").is_file() {
+        let _ = std::fs::rename(dir.join("sessions/current"), &key);
+    }
+}
 
 impl Engine {
     pub fn new(settings: Settings, team: TeamSpec, project: Project, library: Arc<Library>, plugins: Arc<Plugins>) -> Engine {
@@ -322,7 +446,7 @@ impl Engine {
             ui: Mutex::new(None),
         });
         let hive = Hive::boot(crate::bundle::profile(&domain, &harness));
-        Engine { settings: domain.settings.clone(), team: domain.team.clone(), project: domain.project.clone(), library: domain.library.clone(), plugins: domain.plugins.clone(), skills: domain.skills.clone(), domain, hive }
+        Engine { settings: domain.settings.clone(), team: domain.team.clone(), project: domain.project.clone(), library: domain.library.clone(), plugins: domain.plugins.clone(), skills: domain.skills.clone(), domain, hive, chat_key: RwLock::new("current".into()) }
     }
 
     pub fn rescan_skills(&self) {
@@ -359,14 +483,29 @@ impl Engine {
     /// The coordinator session file of the conversation in progress, if any.
     pub fn session_path(&self) -> Option<PathBuf> {
         let dir = self.domain.project().dir;
-        let id = std::fs::read_to_string(dir.join(CURRENT)).ok()?;
+        let id = std::fs::read_to_string(dir.join(self.current())).ok()?;
         Some(dir.join("sessions").join(format!("{}.jsonl", id.trim())))
     }
 
     /// Starts a new conversation: the next message opens a fresh coordinator session (the
     /// old session files stay in sessions/).
     pub fn new_conversation(&self) {
-        let _ = std::fs::remove_file(self.domain.project().dir.join(CURRENT));
+        let _ = std::fs::remove_file(self.domain.project().dir.join(self.current()));
+    }
+
+    /// The file naming the session of the conversation this engine continues.
+    fn current(&self) -> String {
+        format!("sessions/{}", self.chat_key.read().map(|k| k.clone()).unwrap_or_else(|_| "current".into()))
+    }
+
+    /// Makes the engine continue the open team's own conversation in its project (moving a
+    /// project's older single conversation to that team first).
+    pub fn use_team_chat(&self) {
+        let team = self.domain.team().name;
+        adopt_legacy_chat(&self.domain.project().dir, &team);
+        if let Ok(mut k) = self.chat_key.write() {
+            *k = team_chat_key(&team);
+        }
     }
 
     /// One turn of the engineer's conversation with the coordinator. The conversation is
@@ -389,7 +528,8 @@ impl Engine {
         // another TellusHive (a window, `run`, an MCP server) may be in a turn of this
         // conversation: opening it here would seal that turn as interrupted and interleave two
         // writers in one log
-        let lock = project.dir.join("sessions/current.lock");
+        let current = self.current();
+        let lock = project.dir.join(format!("{current}.lock"));
         if let Some(pid) = std::fs::read_to_string(&lock).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
             if pid != std::process::id() && pid_alive(pid) {
                 let e = format!("this project's conversation is in use by another TellusHive (process {pid}); wait for it to finish or stop it first");
@@ -408,13 +548,13 @@ impl Engine {
             }
         }
         let _unlock = Unlock(lock);
-        let session = std::fs::read_to_string(project.dir.join(CURRENT)).ok().and_then(|id| store.open(id.trim()).ok());
+        let session = std::fs::read_to_string(project.dir.join(&current)).ok().and_then(|id| store.open(id.trim()).ok());
         let session = match session {
             Some(s) => s,
             None => {
                 let id = store.new_id("chat");
                 let s = store.create(SessionMeta { id: id.clone(), agent: coord.id.clone(), label: crate::project::clip(&input.text, 120), parent: None, depth: 0 })?;
-                std::fs::write(project.dir.join(CURRENT), &id).map_err(|e| e.to_string())?;
+                std::fs::write(project.dir.join(&current), &id).map_err(|e| e.to_string())?;
                 s
             }
         };

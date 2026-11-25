@@ -2,6 +2,7 @@
 //! the built-in engineering tools, mounted as a plugin bundle on th-hive (the Rust port of
 //! the DeepSeek Harness architecture).
 
+pub mod bots;
 pub mod bundle;
 pub mod config;
 pub mod engine;
@@ -34,6 +35,8 @@ pub struct ServeOptions {
     /// The calling agent's session id.
     pub parent: Option<String>,
     pub depth: usize,
+    /// The team the calling engine runs (a bot's team exists only in the app, not in teams/).
+    pub team_file: Option<std::path::PathBuf>,
 }
 
 /// Serves tools over MCP stdio. Without an agent: the built-in tools of the project (used by
@@ -44,17 +47,20 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
     let Some(agent_id) = &opt.agent else { return serve_mcp(project_dir) };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use th_hive::{keys, AgentRegistry, EventBody, SessionMeta, SessionStore, ToolRegistry};
-    let settings = Settings::load();
+    // the bots' own APIs, for an agent of a bot that has one
+    let settings = crate::bots::Bot::engine_settings(&Settings::load(), &crate::bots::Bot::list());
     let project = Project::open_or_create(project_dir)?;
     let library = Arc::new(th_kb::Library::open(&th_kb::Library::default_root())?);
-    let team = TeamSpec::load(&project.info.team);
+    let handed: Option<TeamSpec> = opt.team_file.as_ref().and_then(|f| crate::config::read_json(f).ok());
+    let team = handed.clone().unwrap_or_else(|| TeamSpec::load(&project.info.team));
     // what this server runs with, since its environment comes from the coding agent: a wrong
     // data folder silently gives the engineer's own settings and team
     {
         let file = TeamSpec::dir().join(TeamSpec::file_name(&project.info.team));
-        let source = match crate::config::read_json::<TeamSpec>(&file) {
-            Ok(_) => format!("file {}", file.display()),
-            Err(e) => format!("BUILT-IN FALLBACK ({e})"),
+        let source = match (&handed, crate::config::read_json::<TeamSpec>(&file)) {
+            (Some(_), _) => format!("handed over by the app ({})", opt.team_file.as_ref().map(|f| f.display().to_string()).unwrap_or_default()),
+            (None, Ok(_)) => format!("file {}", file.display()),
+            (None, Err(e)) => format!("BUILT-IN FALLBACK ({e})"),
         };
         let agents: Vec<String> = team.agents.iter().map(|a| format!("{}={}", a.id, if a.provider.is_empty() { format!("(default {}/{})", settings.default_provider, settings.default_model) } else { a.provider.clone() })).collect();
         let line = format!(
@@ -63,7 +69,7 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
             std::process::id(),
             crate::config::data_dir().display(),
             std::env::var("TELLUSHIVE_HOME").ok(),
-            project.info.team,
+            team.name,
             agents.join(", ")
         );
         let _ = std::fs::create_dir_all(project.dir.join("sessions"));
@@ -82,8 +88,9 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
     let session = store.create(SessionMeta { id: sid, agent: spec.id.clone(), label: "tools served to Claude Code / Codex".into(), parent: opt.parent.clone(), depth: opt.depth })?;
     let agent = ctx.expect::<AgentRegistry>(keys::AGENTS)?.create_at(preset, session, opt.depth, opt.parent.clone(), Arc::new(AtomicBool::new(false)));
     let reg = ctx.expect::<ToolRegistry>(keys::TOOLS)?;
-    // run_python stays inside the app (see below); the program has its own code tools
-    let toolset: Vec<_> = reg.resolve(&agent, &ctx).into_iter().filter(|d| d.name != "run_python").collect();
+    // run_python is served too: the program runs with only these tools allowed, so its own
+    // shell would wait for an approval nobody can give
+    let toolset: Vec<_> = reg.resolve(&agent, &ctx);
     let calls = Arc::new(AtomicU64::new(1));
     let served = toolset
         .iter()

@@ -28,11 +28,20 @@ pub struct ProjectInfo {
     pub team: String,
     /// Free text the agents always see: client, site, units, office rules.
     pub notes: String,
+    /// The plugins (MCP programs) this project uses; None = every enabled plugin.
+    pub plugins: Option<Vec<String>>,
+}
+
+impl ProjectInfo {
+    /// Whether the project lets its agents use this plugin.
+    pub fn allows_plugin(&self, name: &str) -> bool {
+        self.plugins.as_ref().is_none_or(|l| l.iter().any(|p| p == name))
+    }
 }
 
 impl Default for ProjectInfo {
     fn default() -> Self {
-        ProjectInfo { name: "Untitled".into(), description: String::new(), standards: vec![], team: crate::config::default_team().name, notes: String::new() }
+        ProjectInfo { name: "Untitled".into(), description: String::new(), standards: vec![], team: crate::config::default_team().name, notes: String::new(), plugins: None }
     }
 }
 

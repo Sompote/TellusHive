@@ -75,7 +75,7 @@ impl PluginsView {
             changed = true;
         }
         ui.add_space(8.0);
-        chrome::hint(ui, "Equip agents with plugins in step 3. A plugin's tools reach the agent as <plugin>__<tool>.");
+        chrome::hint(ui, "Equip a team's agents with plugins in the Team layer; a bot picks its own in its profile. A plugin's tools reach the agent as <plugin>__<tool>.");
         changed
     }
 

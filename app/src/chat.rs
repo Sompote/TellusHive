@@ -153,11 +153,24 @@ pub struct ChatView {
     announced: std::collections::HashSet<String>,
     /// Text streamed so far by each agent run (the live "Writing: …" line).
     streaming: std::collections::HashMap<u64, String>,
+    /// Set in the Bots workspace: the chat is drawn as a messenger with this bot.
+    pub bot: Option<BotLook>,
+    /// The transcript file in the project folder ("chat.json", or one per team).
+    pub file: String,
+}
+
+/// How a bot's chat looks: whose replies are the bubbles, and its picture.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BotLook {
+    pub name: String,
+    pub tagline: String,
+    pub avatar: Option<PathBuf>,
+    pub color: Color32,
 }
 
 impl ChatView {
     pub fn new(saved: Saved) -> Self {
-        ChatView { saved, input: String::new(), attachments: vec![], rx: None, cancel: Arc::new(AtomicBool::new(false)), depth: Default::default(), busy_since: None, new_artifacts: vec![], open_request: None, scroll_to_end: true, run_usage: UsageReport::default(), live: vec![], finished: vec![], names: Default::default(), model_saves: vec![], open_model: None, announced: Default::default(), streaming: Default::default() }
+        ChatView { saved, input: String::new(), attachments: vec![], rx: None, cancel: Arc::new(AtomicBool::new(false)), depth: Default::default(), busy_since: None, new_artifacts: vec![], open_request: None, scroll_to_end: true, run_usage: UsageReport::default(), live: vec![], finished: vec![], names: Default::default(), model_saves: vec![], open_model: None, announced: Default::default(), streaming: Default::default(), bot: None, file: "chat.json".into() }
     }
 
     /// For the UI screenshots (TELLUSHIVE_SHOT_BUSY=1): a task that looks as if it were running,
@@ -182,14 +195,26 @@ impl ChatView {
     }
 
     pub fn load(dir: &std::path::Path) -> Saved {
-        std::fs::read_to_string(dir.join("chat.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        Self::load_file(dir, "chat.json")
+    }
+
+    pub fn load_file(dir: &std::path::Path, file: &str) -> Saved {
+        std::fs::read_to_string(dir.join(file)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    /// A team's own conversation in a project.
+    pub fn for_team(dir: &std::path::Path, team: &str) -> Self {
+        let file = th_harness::engine::team_chat_file(team);
+        let mut c = ChatView::new(Self::load_file(dir, &file));
+        c.file = file;
+        c
     }
 
     pub fn save(&self, dir: &std::path::Path) {
         if let Ok(s) = serde_json::to_string(&self.saved) {
-            let tmp = dir.join("chat.json.tmp");
+            let tmp = dir.join(format!("{}.tmp", self.file));
             if std::fs::write(&tmp, s).is_ok() {
-                let _ = std::fs::rename(tmp, dir.join("chat.json"));
+                let _ = std::fs::rename(tmp, dir.join(&self.file));
             }
         }
     }
@@ -573,6 +598,9 @@ impl ChatView {
             self.names = engine.team.read().map(|t| t.agents.iter().map(|a| (a.id.clone(), a.name.clone())).collect()).unwrap_or_default();
         }
         let pad: i8 = if full { 24 } else { 0 };
+        if let Some(look) = self.bot.clone() {
+            self.bot_input_ui(ui, engine, colours, &look);
+        } else {
         egui::TopBottomPanel::bottom(if full { "chat_input_full" } else { "chat_input_dock" }).show_separator_line(false).frame(egui::Frame::NONE.inner_margin(egui::Margin { left: pad, right: pad, top: 6, bottom: 12 })).show_inside(ui, |ui| {
             let w = ui.available_width().min(if full { 860.0 } else { f32::INFINITY });
             ui.vertical_centered(|ui| {
@@ -602,7 +630,7 @@ impl ChatView {
                             }
                         });
                     }
-                    let edit = egui::TextEdit::multiline(&mut self.input).hint_text("Ask the design office…  Enter sends, Shift+Enter for a new line").desired_rows(if full { 3 } else { 2 }).desired_width(f32::INFINITY).frame(false).lock_focus(true);
+                    let edit = egui::TextEdit::multiline(&mut self.input).hint_text(format!("Ask {}…  Enter sends, Shift+Enter for a new line", engine.team.read().map(|t| t.name.clone()).unwrap_or_else(|_| "the team".into()))).desired_rows(if full { 3 } else { 2 }).desired_width(f32::INFINITY).frame(false).lock_focus(true);
                     let resp = ui.add(edit);
                     let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
                     if enter && self.input.ends_with('\n') {
@@ -632,6 +660,7 @@ impl ChatView {
                 });
             });
         });
+        }
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             let w = ui.available_width().min(if full { 860.0 } else { f32::INFINITY });
@@ -642,7 +671,11 @@ impl ChatView {
                     ui.set_width(w);
                     ui.add_space(if full { 24.0 } else { 6.0 });
                     if self.saved.entries.is_empty() {
-                        self.empty_ui(ui, full);
+                        if let Some(look) = self.bot.clone() {
+                            bot_empty_ui(ui, &look);
+                        } else {
+                            self.empty_ui(ui, full);
+                        }
                     }
                     // simple view: an agent's consecutive steps fold into one line; its reasoning is left out
                     let step_of = |e: &Entry| match e {
@@ -707,6 +740,27 @@ impl ChatView {
         let t = tokens(ui);
         let indent = |d: usize| 22.0 * d as f32;
         match self.saved.entries[i].clone() {
+            Entry::User { text, attachments } if self.bot.is_some() => {
+                ui.add_space(14.0);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    egui::Frame::NONE.fill(t.text).corner_radius(22).inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
+                        ui.set_max_width(ui.available_width() * 0.7);
+                        ui.add(egui::Label::new(RichText::new(&text).size(15.0).color(t.field)).wrap());
+                        for a in &attachments {
+                            attachment_ui(ui, a, &mut self.open_request);
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+            }
+            Entry::Text { agent, depth: 0, text } if self.bot.as_ref().is_some_and(|b| b.name == agent) => {
+                ui.add_space(6.0);
+                egui::Frame::NONE.fill(t.hover).corner_radius(18).inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
+                    ui.set_max_width(ui.available_width() * 0.82);
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.5));
+                    markdown::show(ui, &text, &t);
+                });
+            }
             Entry::User { text, attachments } => {
                 ui.add_space(10.0);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
@@ -1025,4 +1079,133 @@ mod tests {
         // arguments cut off mid-way still give a readable line
         assert_eq!(friendly("calc_sheet", r#"{"title":"B1 be"#, &names, false), "Calculating");
     }
+}
+
+/// The first screen of a bot's chat: its picture, name and a few openers.
+fn bot_empty_ui(ui: &mut egui::Ui, look: &BotLook) {
+    let t = tokens(ui);
+    ui.add_space(60.0);
+    ui.vertical_centered(|ui| {
+        crate::bots::avatar(ui, &look.name, look.color, look.avatar.as_deref(), 96.0);
+        ui.add_space(10.0);
+        ui.label(RichText::new(&look.name).font(medium_font(24.0)));
+        if !look.tagline.is_empty() {
+            ui.label(RichText::new(&look.tagline).size(14.0).color(t.text_dim));
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new(format!("Send {} a message to start.", look.name)).size(13.0).color(t.text_faint));
+    });
+}
+
+impl ChatView {
+    /// The messenger-style message box of a bot's chat: a rounded pill with attach on the
+    /// left and a round send (or stop) button on the right.
+    fn bot_input_ui(&mut self, ui: &mut egui::Ui, engine: &Arc<Engine>, colours: &dyn Fn(&str) -> Color32, look: &BotLook) {
+        let t = tokens(ui);
+        egui::TopBottomPanel::bottom("chat_input_bot").show_separator_line(false).frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 24, top: 6, bottom: 18 })).show_inside(ui, |ui| {
+            let w = ui.available_width().min(980.0);
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(w);
+                if self.busy() {
+                    self.working_ui(ui, colours, w);
+                }
+                if !self.attachments.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        let mut remove = None;
+                        for (i, a) in self.attachments.iter().enumerate() {
+                            let name = a.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            egui::Frame::NONE.fill(t.hover).corner_radius(12).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(name).size(12.0));
+                                    if chrome::remove_button(ui, "Remove").clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                        if let Some(i) = remove {
+                            self.attachments.remove(i);
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+                egui::Frame::NONE.fill(t.card).stroke(egui::Stroke::new(1.0_f32, t.field_border)).corner_radius(28).inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 8 }).show(ui, |ui| {
+                    ui.set_width(w - 22.0);
+                    ui.horizontal(|ui| {
+                        if round_button(ui, 36.0, t.hover, |p, r| {
+                            let c = r.center();
+                            let s = egui::Stroke::new(1.6_f32, t.text_dim);
+                            p.line_segment([c - egui::vec2(7.0, 0.0), c + egui::vec2(7.0, 0.0)], s);
+                            p.line_segment([c - egui::vec2(0.0, 7.0), c + egui::vec2(0.0, 7.0)], s);
+                        })
+                        .on_hover_text("Attach pictures, PDFs, drawings, spreadsheets or text (or drop them on the window)")
+                        .clicked()
+                        {
+                            if let Some(files) = rfd::FileDialog::new().pick_files() {
+                                for f in files {
+                                    self.add_attachment(f);
+                                }
+                            }
+                        }
+                        let send_w = 40.0;
+                        let edit = egui::TextEdit::multiline(&mut self.input)
+                            .hint_text(RichText::new(format!("Message {}", look.name)).size(15.0))
+                            .font(egui::FontId::proportional(15.0))
+                            .desired_rows(1)
+                            .desired_width(ui.available_width() - send_w - 10.0)
+                            .frame(false)
+                            .margin(egui::Margin::symmetric(4, 8))
+                            .lock_focus(true);
+                        let resp = ui.add(edit);
+                        let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+                        if enter && self.input.ends_with('\n') {
+                            self.input.pop();
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if self.busy() {
+                                if round_button(ui, send_w, t.error, |p, r| {
+                                    p.rect_filled(egui::Rect::from_center_size(r.center(), egui::vec2(12.0, 12.0)), 2.0, Color32::WHITE);
+                                })
+                                .on_hover_text("Stop")
+                                .clicked()
+                                {
+                                    self.stop();
+                                }
+                            } else {
+                                let ready = !self.input.trim().is_empty() || !self.attachments.is_empty();
+                                let fill = if ready { t.text } else { t.text_faint };
+                                let ink = t.field;
+                                if round_button(ui, send_w, fill, |p, r| {
+                                    let c = r.center();
+                                    let s = egui::Stroke::new(2.0_f32, ink);
+                                    p.line_segment([c + egui::vec2(0.0, 7.0), c - egui::vec2(0.0, 7.0)], s);
+                                    p.line_segment([c - egui::vec2(0.0, 7.0), c + egui::vec2(-6.0, -1.0)], s);
+                                    p.line_segment([c - egui::vec2(0.0, 7.0), c + egui::vec2(6.0, -1.0)], s);
+                                })
+                                .on_hover_text("Send (Enter)")
+                                .clicked()
+                                    || enter
+                                {
+                                    self.send(engine, ui.ctx());
+                                }
+                            }
+                        });
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(14.0);
+                    ui.checkbox(&mut self.saved.details, RichText::new("Show the steps in detail").size(11.0).color(t.text_faint));
+                });
+            });
+        });
+    }
+}
+
+/// A round button with a painted glyph.
+fn round_button(ui: &mut egui::Ui, size: f32, fill: Color32, glyph: impl FnOnce(&egui::Painter, egui::Rect)) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let f = if resp.hovered() { fill.gamma_multiply(0.85) } else { fill };
+    ui.painter().circle_filled(r.center(), size / 2.0, f);
+    glyph(ui.painter(), r);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

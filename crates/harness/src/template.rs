@@ -190,7 +190,7 @@ impl Template {
             let missing: Vec<String> = self.standards.iter().enumerate().filter(|(_, id)| !has_standard(id)).map(|(i, id)| self.standard_codes.get(i).cloned().unwrap_or_else(|| id.clone())).collect();
             notes.push(format!("{} of {} standards are not in this library ({}); import them under Standards", self.standards.len() - standards.len(), self.standards.len(), missing.join(", ")));
         }
-        let info = ProjectInfo { name: project_name.to_string(), description: self.project_description.clone(), standards, team: team.name.clone(), notes: self.notes.clone() };
+        let info = ProjectInfo { name: project_name.to_string(), description: self.project_description.clone(), standards, team: team.name.clone(), notes: self.notes.clone(), plugins: None };
         Applied { info, team, settings_changed, notes }
     }
 }
