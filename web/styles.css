@@ -156,7 +156,7 @@ h1, h2, h3, p { margin: 0; }
 .lede__more { display: none; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s-3); margin-top: var(--s-6); }
 
-/* the live calculation */
+/* the hero figure: a drawing-sheet frame */
 .calc {
   margin: 0;
   background: var(--c-paper);
@@ -168,23 +168,32 @@ h1, h2, h3, p { margin: 0; }
   border-bottom: var(--hair) solid var(--c-ink);
 }
 .calc__hint { color: var(--c-ink-3); }
-.calc__stage { padding: var(--s-4) var(--s-2) var(--s-2); cursor: ew-resize; touch-action: pan-y; }
+.calc__stage { padding: var(--s-4) var(--s-3) var(--s-3); }
 .calc__svg { display: block; width: 100%; height: auto; overflow: visible; }
-.dim, .axis { stroke: var(--c-ink-3); stroke-width: 1; }
-.member { fill: var(--c-ink); }
-.support { fill: none; stroke: var(--c-ink); stroke-width: 3; }
-.hatch { stroke: var(--c-ink-3); stroke-width: 1.5; fill: none; }
-.react line { stroke: var(--c-ink); stroke-width: 3; }
-.react path { fill: var(--c-ink); }
-.ground { stroke: var(--c-ink); stroke-width: 3; }
-.load line { stroke: var(--c-accent); stroke-width: 4; }
-.load path { fill: var(--c-accent); }
-.bmd { fill: var(--c-accent-soft); stroke: var(--c-accent); stroke-width: 3; stroke-linejoin: round; }
-.mmax { stroke: var(--c-accent); stroke-width: 1; stroke-dasharray: 4 4; }
 .lbl { font: 500 36px var(--f-mono); fill: var(--c-ink); }
-.lbl--accent { fill: var(--c-accent); }
 .lbl--muted { fill: var(--c-ink-3); }
-.rlbl { display: none; }
+
+/* the team at work: one request through the design office */
+.crew .node__name { font-size: 28px; font-family: var(--f-sans); font-weight: 600; }
+.crew .node__state { font-size: 24px; }
+.crew .msg__text { font-size: 23px; }
+.msg__box, .node__box { fill: var(--c-paper); stroke: var(--c-ink-3); stroke-width: 2; transition: stroke var(--d-fast) var(--ease), fill var(--d-fast) var(--ease); }
+.msg__box { stroke: var(--c-ink); }
+.node__ring { fill: none; stroke: var(--c-rule); stroke-width: 4; transition: stroke var(--d-fast) var(--ease); }
+.node__dot { fill: var(--dot); }
+.node__track { fill: var(--c-grid); }
+.node__bar { fill: var(--c-accent); transition: width var(--d-mid) var(--ease); }
+.link { fill: none; stroke: var(--c-rule); stroke-width: 2.5; transition: stroke var(--d-fast) var(--ease); }
+.link--check { stroke-dasharray: 6 6; }
+.node.is-active .node__box { stroke: var(--c-accent); stroke-width: 3; fill: var(--c-accent-soft); }
+.node.is-active .node__ring { stroke: var(--c-accent); }
+.node.is-active .node__state, .node.is-done .node__state { fill: var(--c-accent); }
+.node.is-done .node__box { stroke: var(--c-ink); }
+.node.is-done .node__ring { stroke: var(--c-ink); }
+.link.is-active { stroke: var(--c-accent); stroke-dasharray: 10 8; animation: flow 0.9s linear infinite; }
+.link.is-done { stroke: var(--c-ink-3); stroke-dasharray: none; }
+@keyframes flow { to { stroke-dashoffset: -18; } }
+@media (max-width: 699px) { .crew .node__state { display: none; } }
 
 .calc__out {
   margin: 0; display: grid; grid-template-columns: repeat(2, 1fr);
@@ -321,11 +330,6 @@ h1, h2, h3, p { margin: 0; }
   :root { --gutter: var(--s-6); }
   .bar__nav a:not(:last-child) { display: inline; }
   .lede__more { display: inline; }
-  .lbl { font-size: 18px; }
-  .rlbl { display: inline; }
-  .load line { stroke-width: 2.5; }
-  .support, .ground, .react line { stroke-width: 1.5; }
-  .bmd { stroke-width: 1.5; }
   .hero { padding-top: var(--s-9); padding-bottom: var(--s-9); }
   .statement { grid-template-columns: 2fr 1fr; align-items: end; }
   .team__head { grid-template-columns: 1fr 1fr; align-items: end; }

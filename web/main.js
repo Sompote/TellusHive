@@ -1,66 +1,78 @@
-// TellusHive web: the live beam calculation, scroll reveals, the result count and checksum copy.
+// TellusHive web: the team at work, scroll reveals, the result count and checksum copy.
 (() => {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // ---- live calculation: a point load P on a simply supported beam of span L ----
-  // Reactions RA = P b / L, RB = P a / L; maximum moment under the load M = P a b / L.
-  // The section line is indicative: fy = 400 MPa, d = 540 mm, lever arm 0.9 d, phi 0.9, DB25 = 491 mm2.
-  const P = 120, L = 8, X0 = 80, X1 = 920, Y0 = 262, MSCALE = 0.5; // px per kNm
-  const stage = document.getElementById("stage");
-  const load = document.getElementById("load");
-  const bmd = document.getElementById("bmd");
-  const mmax = document.getElementById("mmax");
-  const mmaxT = document.getElementById("mmax-t");
-  const raT = document.getElementById("ra-t");
-  const rbT = document.getElementById("rb-t");
-  const out = { a: document.getElementById("o-a"), ra: document.getElementById("o-ra"), rb: document.getElementById("o-rb"), m: document.getElementById("o-m"), bar: document.getElementById("o-bar") };
-  const svg = document.getElementById("calc");
-
-  let target = 4, cur = 4, pointer = false, t0 = performance.now(), running = false;
-
-  const draw = (a) => {
-    const b = L - a, ra = (P * b) / L, rb = (P * a) / L, m = (P * a * b) / L;
-    const x = X0 + (a / L) * (X1 - X0), y = Y0 + m * MSCALE;
-    load.setAttribute("transform", `translate(${x.toFixed(1)} 0)`);
-    bmd.setAttribute("d", `M${X0} ${Y0} L${x.toFixed(1)} ${y.toFixed(1)} L${X1} ${Y0} Z`);
-    mmax.setAttribute("x1", x.toFixed(1)); mmax.setAttribute("x2", x.toFixed(1)); mmax.setAttribute("y2", y.toFixed(1));
-    mmaxT.setAttribute("x", Math.min(860, Math.max(140, x)).toFixed(1));
-    mmaxT.setAttribute("y", (y + 26).toFixed(1));
-    mmaxT.textContent = `${m.toFixed(1)} kNm`;
-    raT.textContent = `${ra.toFixed(1)} kN`;
-    rbT.textContent = `${rb.toFixed(1)} kN`;
-    out.a.textContent = a.toFixed(2);
-    out.ra.textContent = ra.toFixed(1);
-    out.rb.textContent = rb.toFixed(1);
-    out.m.textContent = m.toFixed(1);
-    const as = (m * 1e6) / (0.9 * 400 * 0.9 * 540);
-    out.bar.textContent = `${Math.max(2, Math.ceil(as / 491))} DB25`;
-  };
-
-  const place = (ev) => {
-    const r = svg.getBoundingClientRect();
-    const px = ((ev.clientX - r.left) / r.width) * 1000;
-    target = Math.min(L - 0.25, Math.max(0.25, ((px - X0) / (X1 - X0)) * L));
-    pointer = true;
-    kick();
-  };
-  stage.addEventListener("pointermove", place);
-  stage.addEventListener("pointerdown", place);
-  stage.addEventListener("pointerleave", () => { pointer = false; t0 = performance.now(); kick(); });
-
-  const frame = (now) => {
-    if (!pointer && !reduce && now - t0 > 3000) {
-      // idle: after the page settles, the load walks slowly along the span
-      target = 4 + 2.6 * Math.sin((now - t0 - 3000) / 2600);
+  // ---- the team at work: one request through the design office (an illustrative run) ----
+  // Each step changes some nodes (state text, progress bar, active or done), some links and
+  // the output counts; the run replays while the figure is on screen.
+  const crew = document.querySelector(".crew");
+  if (crew) {
+    const $ = (id) => document.getElementById(id);
+    const NODES = ["arun", "coord", "designer", "geo", "checker", "drafter", "reporter"];
+    const LINKS = ["arun", "coord", "designer", "geo", "checker", "drafter", "reporter", "check"];
+    const STEPS = [
+      [0, "The engineer sends one message.", {}, {}, {}],
+      [800, "Arun, the bot, reads the request.", { arun: ["active", "Reading"] }, { arun: "active" }, {}],
+      [2200, "Arun hands the job to the design office.", { arun: ["active", "Delegating"] }, { arun: "done", coord: "active" }, {}],
+      [3200, "The coordinator splits the work.", { arun: ["", "Waiting"], coord: ["active", "Planning 3 tasks"] }, { coord: "done" }, {}],
+      [4400, "The designer and the geotechnical analyst search the standards.", { coord: ["active", "Delegating"], designer: ["active", "Searching", 30], geo: ["active", "Searching", 25] }, { designer: "active", geo: "active" }, {}],
+      [6000, "They calculate to the clauses they found.", { designer: ["active", "Calculating", 70], geo: ["active", "Calculating", 60] }, {}, {}],
+      [7600, "Two calculation sheets saved, each with its clause references.", { designer: ["done", "Saved \u2713", 100], geo: ["done", "Saved \u2713", 100] }, { designer: "done", geo: "done" }, { calc: 2 }],
+      [8400, "The checker recomputes both results independently.", { coord: ["active", "Checking"], checker: ["active", "Recomputing", 50] }, { checker: "active", check: "active" }, {}],
+      [10000, "Both checks pass.", { checker: ["done", "PASS \u2713", 100] }, { checker: "done", check: "done" }, { check: 2 }],
+      [10800, "The drafter draws the pile layout and the cap.", { drafter: ["active", "Drawing", 50] }, { drafter: "active" }, {}],
+      [12200, "The reporter writes the calculation report.", { drafter: ["done", "Done \u2713", 100], reporter: ["active", "Writing", 50] }, { drafter: "done", reporter: "active" }, { draw: 2 }],
+      [13800, "Arun reports back, citing every clause it used.", { reporter: ["done", "Done \u2713", 100], coord: ["done", "Done \u2713"], arun: ["active", "Reporting back"] }, { reporter: "done" }, { rep: 1 }],
+      [15400, "Done: every number traces back to its sheet.", { arun: ["done", "Done \u2713"] }, {}, {}],
+    ];
+    const LOOP = 19000;
+    const now = $("o-now");
+    const reset = () => {
+      NODES.forEach((n) => {
+        const g = $("n-" + n); g.classList.remove("is-active", "is-done");
+        const st = $("s-" + n); if (st) st.textContent = n === "arun" ? "Idle" : "Waiting";
+        const b = $("b-" + n); if (b) b.setAttribute("width", "0");
+      });
+      LINKS.forEach((l) => $("l-" + l).classList.remove("is-active", "is-done"));
+      ["calc", "check", "draw", "rep"].forEach((k) => { $("o-" + k).textContent = "0"; });
+    };
+    const apply = ([, text, nodes, links, outs]) => {
+      now.textContent = text;
+      Object.entries(nodes).forEach(([n, [state, label, pct]]) => {
+        const g = $("n-" + n);
+        g.classList.toggle("is-active", state === "active");
+        g.classList.toggle("is-done", state === "done");
+        $("s-" + n).textContent = label;
+        if (pct !== undefined) $("b-" + n).setAttribute("width", String(1.52 * pct));
+      });
+      Object.entries(links).forEach(([l, state]) => {
+        const el = $("l-" + l);
+        el.classList.toggle("is-active", state === "active");
+        el.classList.toggle("is-done", state === "done");
+      });
+      Object.entries(outs).forEach(([k, v]) => { $("o-" + k).textContent = String(v); });
+    };
+    if (reduce) {
+      // no motion: the finished run, in one look
+      reset(); STEPS.forEach(apply);
+      LINKS.forEach((l) => $("l-" + l).classList.replace("is-active", "is-done"));
+    } else {
+      // each step on its own timer, the whole run again after LOOP, only while it is on screen
+      let timers = [], visible = false;
+      const play = () => {
+        reset();
+        timers = STEPS.map((st) => setTimeout(() => apply(st), st[0]));
+        timers.push(setTimeout(play, LOOP));
+      };
+      const run = () => { if (visible && !document.hidden && !timers.length) play(); };
+      const pause = () => { timers.forEach(clearTimeout); timers = []; reset(); };
+      reset();
+      if ("IntersectionObserver" in window) {
+        new IntersectionObserver(([e]) => { visible = e.isIntersecting; visible ? run() : pause(); }, { threshold: 0.25 }).observe(crew);
+      } else { visible = true; run(); }
+      document.addEventListener("visibilitychange", () => (document.hidden ? pause() : run()));
     }
-    cur += (target - cur) * (reduce ? 1 : 0.14);
-    draw(cur);
-    if (reduce && Math.abs(target - cur) < 1e-3) { running = false; return; }
-    requestAnimationFrame(frame);
-  };
-  const kick = () => { if (!running) { running = true; requestAnimationFrame(frame); } };
-  draw(cur);
-  kick();
+  }
 
   // ---- scroll reveal ----
   const els = document.querySelectorAll(".statement__text, .notes li, .team__head, .reg, .evidence__figure, .evidence__grid, .flow .h2, .tick, .download > *");

@@ -34,54 +34,96 @@
       <div class="hero__copy">
         <p class="eyebrow mono">Open source &middot; Rust &middot; macOS and Windows</p>
         <h1 class="display" id="hero-title">Design that shows <em>its working.</em></h1>
-        <p class="lede">A team of AI agents for civil engineering design.<span class="lede__more"> Describe the beam, footing, wall or slope; a coordinator hands it to a designer, a checker and analysts that calculate to your standards, run the analysis programs, draw the details and write the calculation report.</span></p>
+        <p class="lede">A team of AI agents for civil engineering design.<span class="lede__more"> Describe the beam, footing, wall or slope to your bot, and it hands the job to a design office where a coordinator, a designer, a checker and analysts calculate to your standards, run the analysis programs, draw the details and write the calculation report.</span></p>
         <div class="actions">
           <a class="btn btn--primary" href="#download">Download 0.1.9</a>
           <a class="btn btn--ghost" href="https://github.com/Sompote/TellusHive">Read the source</a>
         </div>
       </div>
 
-      <figure class="calc">
+      <figure class="calc crew">
         <figcaption class="calc__head mono">
-          <span>Calc 01 &middot; Simply supported beam, point load</span>
-          <span class="calc__hint">Move along the beam to place the load</span>
+          <span>Run 01 &middot; One request, the whole office at work</span>
+          <span class="calc__hint">Illustrative run</span>
         </figcaption>
-        <div class="calc__stage" id="stage">
-          <svg class="calc__svg" id="calc" viewBox="0 -44 1000 460" aria-hidden="true">
-            <line class="dim" x1="80" y1="6" x2="920" y2="6"/>
-            <line class="dim" x1="80" y1="-2" x2="80" y2="14"/>
-            <line class="dim" x1="920" y1="-2" x2="920" y2="14"/>
-            <text class="lbl" x="500" y="-10" text-anchor="middle">L = 8.00 m</text>
-            <rect class="member" x="80" y="150" width="840" height="14"/>
-            <path class="support" d="M80 164 L64 192 L96 192 Z"/>
-            <path class="support" d="M920 164 L906 184 L934 184 Z"/>
-            <circle class="support" cx="912" cy="190" r="5"/><circle class="support" cx="928" cy="190" r="5"/>
-            <line class="ground" x1="54" y1="198" x2="106" y2="198"/>
-            <line class="ground" x1="894" y1="198" x2="946" y2="198"/>
-            <path class="hatch" d="M58 208 L66 198 M68 208 L76 198 M78 208 L86 198 M88 208 L96 198 M98 208 L106 198"/>
-            <path class="hatch" d="M898 208 L906 198 M908 208 L916 198 M918 208 L926 198 M928 208 L936 198 M938 208 L946 198"/>
-            <g class="react"><line x1="80" y1="248" x2="80" y2="216"/><path d="M74 226 L80 213 L86 226 Z"/></g>
-            <g class="react"><line x1="920" y1="248" x2="920" y2="216"/><path d="M914 226 L920 213 L926 226 Z"/></g>
-            <g id="load" class="load" transform="translate(500 0)">
-              <line x1="0" y1="78" x2="0" y2="144"/>
-              <path d="M-7 132 L0 147 L7 132 Z"/>
-              <text class="lbl lbl--accent" x="0" y="68" text-anchor="middle">P = 120 kN</text>
+        <div class="calc__stage crew__stage">
+          <svg class="calc__svg" viewBox="0 0 1000 560" role="img" aria-labelledby="crew-title crew-desc">
+            <title id="crew-title">A design team working together</title>
+            <desc id="crew-desc">The engineer messages the bot Arun, who hands the job to the coordinator. The coordinator sends tasks to the designer and the geotechnical analyst, the checker recomputes their results, the drafter draws the details and the reporter writes the calculation report, and Arun reports back.</desc>
+            <defs><clipPath id="clip-arun"><circle cx="0" cy="0" r="44"/></clipPath></defs>
+
+            <g class="msg" id="msg" transform="translate(30 30)">
+              <rect class="msg__box" x="0" y="0" width="470" height="104" rx="4"/>
+              <text class="lbl lbl--muted node__state" x="20" y="34">Engineer</text>
+              <text class="lbl msg__text" x="20" y="66">Pile foundation, 10,000 kN,</text>
+              <text class="lbl msg__text" x="20" y="94">Bangkok clay. Cite the code.</text>
             </g>
-            <text class="lbl rlbl" x="96" y="242" text-anchor="start" id="ra-t">60.0 kN</text>
-            <text class="lbl rlbl" x="904" y="242" text-anchor="end" id="rb-t">60.0 kN</text>
-            <line class="axis" x1="80" y1="262" x2="920" y2="262"/>
-            <path id="bmd" class="bmd" d="M80 262 L500 382 L920 262 Z"/>
-            <line id="mmax" class="mmax" x1="500" y1="262" x2="500" y2="382"/>
-            <text id="mmax-t" class="lbl lbl--accent" x="500" y="408" text-anchor="middle">240.0 kNm</text>
-            <text class="lbl lbl--muted" x="88" y="292" text-anchor="start">M</text>
+            <path class="link" id="l-arun" d="M500 82 L620 82"/>
+
+            <g class="node node--bot" id="n-arun" transform="translate(680 82)">
+              <circle class="node__ring" r="52"/>
+              <image href="assets/team/arun.webp" x="-44" y="-44" width="88" height="88" clip-path="url(#clip-arun)"/>
+              <text class="lbl node__name" x="70" y="-8">Arun &middot; bot</text>
+              <text class="lbl lbl--muted node__state" id="s-arun" x="70" y="30">Idle</text>
+            </g>
+            <path class="link" id="l-coord" d="M680 134 L680 200 L500 200 L500 222"/>
+
+            <g class="node" id="n-coord" transform="translate(500 270)">
+              <rect class="node__box" x="-150" y="-48" width="300" height="96" rx="4"/>
+              <text class="lbl node__name" x="-128" y="-8">Coordinator</text>
+              <text class="lbl lbl--muted node__state" id="s-coord" x="-128" y="30">Waiting</text>
+            </g>
+            <path class="link" id="l-designer" d="M500 340 L100 340 L100 408"/><path class="link" id="l-geo" d="M500 340 L300 340 L300 408"/><path class="link" id="l-checker" d="M500 340 L500 340 L500 408"/><path class="link" id="l-drafter" d="M500 340 L700 340 L700 408"/><path class="link" id="l-reporter" d="M500 340 L900 340 L900 408"/>
+            <path class="link link--check" id="l-check" d="M500 532 L500 548 L100 548 L100 532 M500 548 L300 548 L300 532"/>
+            
+            <g class="node" id="n-designer" transform="translate(100 470)">
+              <rect class="node__box" x="-92" y="-62" width="184" height="124" rx="4"/>
+              <circle class="node__dot" cx="-68" cy="-36" r="9" style="--dot:#2f74d0"/>
+              <text class="lbl node__name" x="-52" y="-26">Designer</text>
+              <text class="lbl lbl--muted node__state" id="s-designer" x="-76" y="14">Waiting</text>
+              <rect class="node__track" x="-76" y="38" width="152" height="6"/>
+              <rect class="node__bar" id="b-designer" x="-76" y="38" width="0" height="6"/>
+            </g>
+            <g class="node" id="n-geo" transform="translate(300 470)">
+              <rect class="node__box" x="-92" y="-62" width="184" height="124" rx="4"/>
+              <circle class="node__dot" cx="-68" cy="-36" r="9" style="--dot:#b07a1c"/>
+              <text class="lbl node__name" x="-52" y="-26">Geotech</text>
+              <text class="lbl lbl--muted node__state" id="s-geo" x="-76" y="14">Waiting</text>
+              <rect class="node__track" x="-76" y="38" width="152" height="6"/>
+              <rect class="node__bar" id="b-geo" x="-76" y="38" width="0" height="6"/>
+            </g>
+            <g class="node" id="n-checker" transform="translate(500 470)">
+              <rect class="node__box" x="-92" y="-62" width="184" height="124" rx="4"/>
+              <circle class="node__dot" cx="-68" cy="-36" r="9" style="--dot:#c8423b"/>
+              <text class="lbl node__name" x="-52" y="-26">Checker</text>
+              <text class="lbl lbl--muted node__state" id="s-checker" x="-76" y="14">Waiting</text>
+              <rect class="node__track" x="-76" y="38" width="152" height="6"/>
+              <rect class="node__bar" id="b-checker" x="-76" y="38" width="0" height="6"/>
+            </g>
+            <g class="node" id="n-drafter" transform="translate(700 470)">
+              <rect class="node__box" x="-92" y="-62" width="184" height="124" rx="4"/>
+              <circle class="node__dot" cx="-68" cy="-36" r="9" style="--dot:#2e9e4b"/>
+              <text class="lbl node__name" x="-52" y="-26">Drafter</text>
+              <text class="lbl lbl--muted node__state" id="s-drafter" x="-76" y="14">Waiting</text>
+              <rect class="node__track" x="-76" y="38" width="152" height="6"/>
+              <rect class="node__bar" id="b-drafter" x="-76" y="38" width="0" height="6"/>
+            </g>
+            <g class="node" id="n-reporter" transform="translate(900 470)">
+              <rect class="node__box" x="-92" y="-62" width="184" height="124" rx="4"/>
+              <circle class="node__dot" cx="-68" cy="-36" r="9" style="--dot:#7b4fd6"/>
+              <text class="lbl node__name" x="-52" y="-26">Reporter</text>
+              <text class="lbl lbl--muted node__state" id="s-reporter" x="-76" y="14">Waiting</text>
+              <rect class="node__track" x="-76" y="38" width="152" height="6"/>
+              <rect class="node__bar" id="b-reporter" x="-76" y="38" width="0" height="6"/>
+            </g>
           </svg>
         </div>
-        <dl class="calc__out mono" aria-live="polite">
-          <div><dt>a</dt><dd><b id="o-a">4.00</b> m</dd></div>
-          <div><dt>R<sub>A</sub></dt><dd><b id="o-ra">60.0</b> kN</dd></div>
-          <div><dt>R<sub>B</sub></dt><dd><b id="o-rb">60.0</b> kN</dd></div>
-          <div><dt>M<sub>max</sub></dt><dd><b id="o-m">240.0</b> kNm</dd></div>
-          <div class="calc__check"><dt>Indicative section, f<sub>y</sub> 400 MPa</dt><dd><span id="o-sec">300 &times; 600</span>, <span id="o-bar">3 DB25</span></dd></div>
+        <dl class="calc__out mono" aria-live="off">
+          <div><dt>Calc sheets</dt><dd><b id="o-calc">0</b></dd></div>
+          <div><dt>Checks</dt><dd><b id="o-check">0</b> / 2 pass</dd></div>
+          <div><dt>Drawings</dt><dd><b id="o-draw">0</b> SVG, DXF</dd></div>
+          <div><dt>Report</dt><dd><b id="o-rep">0</b> PDF</dd></div>
+          <div class="calc__check"><dt>Now</dt><dd id="o-now">The engineer sends one message.</dd></div>
         </dl>
       </figure>
     </section>
