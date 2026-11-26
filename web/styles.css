@@ -378,6 +378,19 @@ h1, h2, h3, p { margin: 0; }
   .sheet__cell--wide { grid-column: 1 / -1; }
 }
 
+/* the Bots workspace, in screenshots */
+.product { padding: var(--s-9) var(--gutter); border-top: var(--hair) solid var(--c-rule); display: grid; gap: var(--s-6); }
+.product__head { display: grid; gap: var(--s-4); }
+.product__head .eyebrow { margin-bottom: 0; }
+.shots { display: grid; gap: var(--s-6); }
+.shot { margin: 0; display: grid; gap: var(--s-3); }
+.shot img { width: 100%; height: auto; border: var(--hair) solid var(--c-rule); border-radius: var(--r-1); background: #fff; box-shadow: 0 12px 32px -18px rgba(0, 0, 0, .35); }
+.shot figcaption { color: var(--c-ink-2); display: flex; gap: var(--s-3); max-width: 70ch; }
+.shot figcaption span { color: var(--c-accent); flex: none; }
+@media (min-width: 700px) {
+  .shots { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; scroll-behavior: auto !important; }
   .reveal { opacity: 1; transform: none; }
