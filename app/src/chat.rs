@@ -159,6 +159,10 @@ pub struct ChatView {
     pub file: String,
     /// A connected agent (MCP server) waiting for the reply of the running task.
     pub external_reply: Option<std::sync::mpsc::Sender<Result<String, String>>>,
+    /// A link clicked in a reply this frame, opened once the project is known.
+    link: Option<String>,
+    /// Why the last clicked link could not be opened, shown above the message box.
+    pub link_error: Option<String>,
 }
 
 /// How a bot's chat looks: whose replies are the bubbles, and its picture.
@@ -178,7 +182,7 @@ impl ChatView {
                 saved.entries.push(Entry::Usage { report: UsageReport { outcome: "interrupted".into(), ..Default::default() } });
             }
         }
-        ChatView { saved, input: String::new(), attachments: vec![], rx: None, cancel: Arc::new(AtomicBool::new(false)), depth: Default::default(), busy_since: None, new_artifacts: vec![], open_request: None, scroll_to_end: true, run_usage: UsageReport::default(), live: vec![], finished: vec![], names: Default::default(), model_saves: vec![], open_model: None, announced: Default::default(), streaming: Default::default(), bot: None, file: "chat.json".into(), external_reply: None }
+        ChatView { saved, input: String::new(), attachments: vec![], rx: None, cancel: Arc::new(AtomicBool::new(false)), depth: Default::default(), busy_since: None, new_artifacts: vec![], open_request: None, scroll_to_end: true, run_usage: UsageReport::default(), live: vec![], finished: vec![], names: Default::default(), model_saves: vec![], open_model: None, announced: Default::default(), streaming: Default::default(), bot: None, file: "chat.json".into(), external_reply: None, link: None, link_error: None }
     }
 
     /// For the UI screenshots (TELLUSHIVE_SHOT_BUSY=1): a task that looks as if it were running,
@@ -636,6 +640,30 @@ impl ChatView {
     /// column); otherwise the docked assistant.
     pub fn ui(&mut self, ui: &mut egui::Ui, engine: &Arc<Engine>, colours: &dyn Fn(&str) -> Color32, full: bool) {
         let t = tokens(ui);
+        // a link clicked in a reply last frame: a web page opens in the browser, a file of the
+        // project opens like an attachment
+        if let Some(target) = self.link.take() {
+            let dir = engine.project.read().map(|p| p.dir.clone()).unwrap_or_default();
+            match link_target(&target, &dir) {
+                Ok(LinkTarget::Web(url)) => {
+                    self.link_error = None;
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                }
+                Ok(LinkTarget::File(p)) => {
+                    self.link_error = None;
+                    self.open_request = Some(p);
+                }
+                Err(e) => self.link_error = Some(e),
+            }
+        }
+        if let Some(e) = self.link_error.clone() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&e).size(12.0).color(t.error));
+                if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                    self.link_error = None;
+                }
+            });
+        }
         if self.names.is_empty() {
             self.names = engine.team.read().map(|t| t.agents.iter().map(|a| (a.id.clone(), a.name.clone())).collect()).unwrap_or_default();
         }
@@ -807,7 +835,9 @@ impl ChatView {
                 egui::Frame::NONE.fill(t.hover).corner_radius(18).inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
                     ui.set_max_width(ui.available_width() * 0.82);
                     ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.5));
-                    markdown::show(ui, &text, &t);
+                    if let Some(l) = markdown::show(ui, &text, &t) {
+                        self.link = Some(l);
+                    }
                 });
             }
             Entry::User { text, attachments } => {
@@ -845,7 +875,9 @@ impl ChatView {
                                 ui.painter().circle_filled(r.center(), 4.0, c);
                                 ui.label(RichText::new(&agent).font(medium_font(12.5)).color(t.text));
                             });
-                            markdown::show(ui, &text, &t);
+                            if let Some(l) = markdown::show(ui, &text, &t) {
+                                self.link = Some(l);
+                            }
                         });
                     });
                 });
@@ -1011,6 +1043,77 @@ fn attachment_ui(ui: &mut egui::Ui, a: &std::path::Path, open: &mut Option<PathB
     }
 }
 
+/// Where a link in a reply points.
+#[derive(Debug, PartialEq)]
+enum LinkTarget {
+    Web(String),
+    File(PathBuf),
+}
+
+/// Files a link may not open, because opening them runs them.
+const RUNNABLE: [&str; 16] = ["app", "command", "sh", "bash", "zsh", "tool", "scpt", "pkg", "dmg", "exe", "bat", "cmd", "ps1", "vbs", "msi", "jar"];
+
+/// A web link, or a file inside the project folder (relative to it, or absolute inside it,
+/// with %20 and the like decoded). Anything else, a missing file, or a file that would run
+/// when opened, is refused with the reason.
+fn link_target(target: &str, project_dir: &std::path::Path) -> Result<LinkTarget, String> {
+    let t = target.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:") {
+        return Ok(LinkTarget::Web(t.to_string()));
+    }
+    if lower.contains("://") && !lower.starts_with("file://") {
+        return Err(format!("The link {t} is not a web page or a file."));
+    }
+    let path = t.strip_prefix("file://").unwrap_or(t);
+    let path = path.split('#').next().unwrap_or(path);
+    let path = percent_decode(path);
+    let path = path.strip_prefix("./").unwrap_or(&path);
+    let p = std::path::Path::new(path);
+    let full = if p.is_absolute() { p.to_path_buf() } else { project_dir.join(p) };
+    // the link stays inside the project folder (no .. out of it, no other folder)
+    let mut norm = PathBuf::new();
+    for c in full.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                norm.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => norm.push(other),
+        }
+    }
+    if !norm.starts_with(project_dir) {
+        return Err(format!("{path} is outside the project folder, so it is not opened from the chat."));
+    }
+    if !norm.exists() {
+        return Err(format!("{path} is not in the project folder (yet)."));
+    }
+    let ext = norm.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if RUNNABLE.contains(&ext.as_str()) {
+        return Err(format!("{path} is a program or script, so the chat does not open it; open it from the project folder if you mean to."));
+    }
+    Ok(LinkTarget::File(norm))
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hex = |c: u8| (c as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn first_line(s: &str, n: usize) -> String {
     let l = s.lines().next().unwrap_or("");
     if l.chars().count() > n {
@@ -1117,6 +1220,26 @@ pub fn friendly(tool: &str, args: &str, names: &std::collections::HashMap<String
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn links_open_inside_the_project_only() {
+        let dir = std::env::temp_dir().join(format!("th-links-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("reports")).unwrap();
+        std::fs::write(dir.join("reports/Slope stability.pdf"), b"%PDF").unwrap();
+        std::fs::write(dir.join("reports/run.command"), b"echo").unwrap();
+        let file = dir.join("reports/Slope stability.pdf");
+        assert_eq!(link_target("reports/Slope%20stability.pdf", &dir), Ok(LinkTarget::File(file.clone())));
+        assert_eq!(link_target("./reports/Slope stability.pdf", &dir), Ok(LinkTarget::File(file.clone())));
+        assert_eq!(link_target(&format!("file://{}", file.display()), &dir), Ok(LinkTarget::File(file)));
+        assert_eq!(link_target("https://example.org", &dir), Ok(LinkTarget::Web("https://example.org".into())));
+        assert!(link_target("reports/missing.pdf", &dir).is_err());
+        assert!(link_target("../../etc/passwd", &dir).is_err());
+        assert!(link_target("/etc/hosts", &dir).is_err());
+        assert!(link_target("reports/run.command", &dir).is_err());
+        // anything that is neither a web page nor an existing project file is refused
+        assert!(link_target("javascript:alert(1)", &dir).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
     use super::*;
 
     #[test]

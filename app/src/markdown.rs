@@ -1,13 +1,17 @@
-//! A small Markdown renderer for the chat replies: headings, lines with **bold**, *italic*
-//! and `code`, bullet and numbered lists, tables, code blocks, quotes and rules. Lines stay
-//! lines (a reply's single line breaks are kept), as the plain text showed them before.
+//! A small Markdown renderer for the chat replies: headings, lines with **bold**, *italic*,
+//! `code` and [links](reports/beam.pdf), bullet and numbered lists, tables, code blocks, quotes
+//! and rules. Lines stay lines (a reply's single line breaks are kept), as the plain text
+//! showed them before. A link is drawn underlined in the accent colour; clicking it hands its
+//! target back to the caller, which opens the file or the web page.
 
 use eframe::egui::{self, text::LayoutJob, Color32, FontFamily, FontId, TextFormat};
 
 use crate::theme::Tokens;
 
-/// Shows `text` as Markdown in the theme's colours.
-pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) {
+/// Shows `text` as Markdown in the theme's colours. Returns the target of a link clicked
+/// this frame.
+pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) -> Option<String> {
+    let mut clicked = None;
     let size = ui.style().text_styles.get(&egui::TextStyle::Body).map_or(13.0, |f| f.size);
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
@@ -61,7 +65,7 @@ pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) {
                 _ => 1.5,
             };
             ui.add_space(size * 0.3);
-            ui.add(egui::Label::new(job(&trimmed[hashes + 1..], size + grow, t.text, true, t)).wrap());
+            text_line(ui, &trimmed[hashes + 1..], size + grow, t.text, true, t, &mut clicked);
             ui.add_space(size * 0.15);
             continue;
         }
@@ -69,7 +73,7 @@ pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) {
             ui.horizontal_top(|ui| {
                 let (r, _) = ui.allocate_exact_size(egui::vec2(3.0, size * 1.4), egui::Sense::hover());
                 ui.painter().rect_filled(r, 1.0, t.accent);
-                ui.add(egui::Label::new(job(q, size, t.text_dim, false, t)).wrap());
+                text_line(ui, q, size, t.text_dim, false, t, &mut clicked);
             });
             continue;
         }
@@ -82,12 +86,58 @@ pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_space(indent + 2.0);
                 ui.add_sized([size * 1.2, size * 1.3], egui::Label::new(egui::RichText::new(mark).size(size).color(t.text_dim)));
-                ui.add(egui::Label::new(job(rest, size, t.text, false, t)).wrap());
+                text_line(ui, rest, size, t.text, false, t, &mut clicked);
             });
             continue;
         }
-        ui.add(egui::Label::new(job(trimmed, size, t.text, false, t)).wrap());
+        text_line(ui, trimmed, size, t.text, false, t, &mut clicked);
     }
+    clicked
+}
+
+/// One wrapped line. With links in it, the line is clickable, and the pointer turns into a
+/// hand over a link.
+fn text_line(ui: &mut egui::Ui, s: &str, size: f32, color: Color32, strong: bool, t: &Tokens, clicked: &mut Option<String>) {
+    let (mut j, links) = job_links(s, size, color, strong, t);
+    if links.is_empty() {
+        ui.add(egui::Label::new(j).wrap());
+        return;
+    }
+    j.wrap.max_width = ui.available_width();
+    let galley = ui.fonts(|f| f.layout_job(j));
+    let resp = ui.add(egui::Label::new(galley.clone()).sense(egui::Sense::click()));
+    let Some(pos) = resp.hover_pos() else { return };
+    let at = galley.cursor_from_pos(pos - resp.rect.min).ccursor.index;
+    if let Some(l) = links.iter().find(|l| (l.start..=l.end).contains(&at)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        let target = l.target.clone();
+        if resp.on_hover_text(&target).clicked() {
+            *clicked = Some(target);
+        }
+    }
+}
+
+/// A link in a laid-out line: its label's characters (not bytes) and where it points.
+struct Link {
+    start: usize,
+    end: usize,
+    target: String,
+}
+
+/// `[label](target)` starting at `k`: the label, the target and the index after the link.
+fn link_at(chars: &[char], k: usize) -> Option<(String, String, usize)> {
+    let close = (k + 1..chars.len()).find(|&i| chars[i] == ']' || chars[i] == '[')?;
+    if chars[close] != ']' || chars.get(close + 1) != Some(&'(') {
+        return None;
+    }
+    let end = (close + 2..chars.len()).find(|&i| chars[i] == ')')?;
+    let label: String = chars[k + 1..close].iter().filter(|c| !matches!(c, '`' | '*')).collect();
+    let target: String = chars[close + 2..end].iter().collect();
+    let target = target.trim().trim_start_matches('<').trim_end_matches('>').trim().to_string();
+    if label.trim().is_empty() || target.is_empty() {
+        return None;
+    }
+    Some((label, target, end + 1))
 }
 
 /// A table: the first row is the header, separator rows (`|---|:--:|`) are skipped.
@@ -205,9 +255,15 @@ fn is_number(s: &str) -> bool {
 }
 
 /// One line with inline **bold**, *italic* and `code` (underscores are left alone: names such
-/// as Borehole_1 use them).
+/// as Borehole_1 use them). Links show their label.
 fn job(s: &str, size: f32, color: Color32, strong: bool, t: &Tokens) -> LayoutJob {
+    job_links(s, size, color, strong, t).0
+}
+
+/// `job`, with the links it holds.
+fn job_links(s: &str, size: f32, color: Color32, strong: bool, t: &Tokens) -> (LayoutJob, Vec<Link>) {
     let mut job = LayoutJob::default();
+    let mut links = vec![];
     let (mut bold, mut italic, mut code) = (strong, false, false);
     let mut buf = String::new();
     let flush = |job: &mut LayoutJob, buf: &mut String, bold: bool, italic: bool, code: bool| {
@@ -242,6 +298,19 @@ fn job(s: &str, size: f32, color: Color32, strong: bool, t: &Tokens) -> LayoutJo
             k += 2;
             continue;
         }
+        if !code && c == '[' {
+            if let Some((label, target, next)) = link_at(&chars, k) {
+                flush(&mut job, &mut buf, bold, italic, code);
+                let start = job.text.chars().count();
+                let mut f = TextFormat::simple(if bold { crate::theme::medium_font(size) } else { FontId::new(size, FontFamily::Proportional) }, t.accent_text);
+                f.underline = egui::Stroke::new(1.0, t.accent_text);
+                f.italics = italic;
+                job.append(&label, 0.0, f);
+                links.push(Link { start, end: start + label.chars().count(), target });
+                k = next;
+                continue;
+            }
+        }
         if c == '`' {
             flush(&mut job, &mut buf, bold, italic, code);
             code = !code;
@@ -259,7 +328,7 @@ fn job(s: &str, size: f32, color: Color32, strong: bool, t: &Tokens) -> LayoutJo
     }
     flush(&mut job, &mut buf, bold, italic, code);
     job.wrap.max_width = f32::INFINITY;
-    job
+    (job, links)
 }
 
 #[cfg(test)]
@@ -281,5 +350,19 @@ mod tests {
         // escaped pipes stay in their cell and show as pipes
         assert_eq!(split_row("| Drawdown | plastic | max \\|u\\| = 19.5 mm |"), ["Drawdown", "plastic", "max \\|u\\| = 19.5 mm"]);
         assert_eq!(job("max \\|u\\| = 19.5 mm, 2 \\* 3", 13.0, Color32::GRAY, false, &t).text, "max |u| = 19.5 mm, 2 * 3");
+    }
+
+    #[test]
+    fn links() {
+        let t = Tokens::get(&egui::Context::default());
+        let (j, l) = job_links("Here it is: [reports/Slope stability.pdf](reports/Slope%20stability.pdf), and [the code](<https://example.org/a b>).", 13.0, Color32::GRAY, false, &t);
+        assert_eq!(j.text, "Here it is: reports/Slope stability.pdf, and the code.");
+        assert_eq!(l.len(), 2);
+        assert_eq!(l[0].target, "reports/Slope%20stability.pdf");
+        assert_eq!(j.text.chars().skip(l[0].start).take(l[0].end - l[0].start).collect::<String>(), "reports/Slope stability.pdf");
+        assert_eq!(l[1].target, "https://example.org/a b");
+        // square brackets that are not a link stay as they are
+        let (j, l) = job_links("a [note] and x[i] (b)", 13.0, Color32::GRAY, false, &t);
+        assert_eq!((j.text.as_str(), l.len()), ("a [note] and x[i] (b)", 0));
     }
 }

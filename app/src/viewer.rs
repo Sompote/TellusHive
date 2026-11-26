@@ -184,7 +184,14 @@ impl Viewer {
                             }
                             ui.add_space(6.0);
                         }
-                        markdown::show(ui, s, &t);
+                        // a link in a Markdown file: a web page, or a file beside it
+                        if let Some(l) = markdown::show(ui, s, &t) {
+                            if l.starts_with("http://") || l.starts_with("https://") {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(l));
+                            } else if let Some(f) = p.parent().map(|d| d.join(l.split('#').next().unwrap_or(&l))).filter(|f| f.is_file()) {
+                                chrome::open_path(&f);
+                            }
+                        }
                     } else {
                         ui.label(RichText::new(s).monospace().size(11.5));
                     }
