@@ -18,19 +18,35 @@ Documentation: [user manual](manual/README.md) · [architecture](docs/architectu
 
 ## Download
 
-Version 0.2.0 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.2.0):
+Version 0.2.1 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.2.1):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.0-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.2.0-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| Windows 10 or 11, 64-bit | [TellusHive-0.2.1-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.1/TellusHive-0.2.1-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.0-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-macos-universal.zip) | `TellusHive.app`, one universal program (0.2.0; the 0.2.1 Mac build follows) |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
 **Open** (or run `xattr -dr com.apple.quarantine /Applications/TellusHive.app` once). On Windows,
 unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More info → Run
-anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
-computer, so please report what you find.
+anyway**. From 0.2.1 the Windows build is made and tested on Windows, and it needs no Visual C++
+runtime.
+
+### What is new in 0.2.1
+
+TellusHive now works properly on Windows. It finds Python (python.org, conda and Microsoft Store
+installs), so the agents can run their scripts, and it finds the engineering programs as `.exe`
+files: built from source, installed under Programs or Program Files, or unpacked from a release
+zip in Downloads or on the Desktop, such as `Pondus-0.1.5-windows-x64`. The programs the agents
+start no longer flash a console window, files and links open through Windows itself, MCP servers
+started with `npx` or `uvx` work, and paths are written with `/` on every system.
+
+A bot whose model is Antigravity (`agy`) now drives its plugins: a plugin the bot switches on from
+the chat reaches it from the next message, and a plugin tool whose arguments Gemini would refuse
+(an array without `items`, as in TellusLEM) is made acceptable before any model sees it. The tool
+server logs which plugins it served and why one failed, in the project's `sessions/mcp-server.log`.
+Formulas in the chat, written in LaTeX as `$\phi M_n \ge M_u$` or `$$\frac{wL^2}{8}$$`, are shown
+with their symbols, raised and lowered scripts, fractions and roots.
 
 ### What is new in 0.2.0
 
@@ -206,7 +222,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 148 tests, no API key needed
+cargo test --workspace     # 156 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step

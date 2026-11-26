@@ -3779,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "tellushive"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs",
  "eframe",
@@ -3821,7 +3821,7 @@ dependencies = [
 
 [[package]]
 name = "th-eng"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "krilla",
  "resvg 0.45.1",
@@ -3832,7 +3832,7 @@ dependencies = [
 
 [[package]]
 name = "th-harness"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs",
  "image",
@@ -3848,7 +3848,7 @@ dependencies = [
 
 [[package]]
 name = "th-hive"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3857,7 +3857,7 @@ dependencies = [
 
 [[package]]
 name = "th-kb"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs",
  "pdf-extract",
@@ -3869,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "th-llm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "th-mcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
