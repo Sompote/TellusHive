@@ -105,13 +105,41 @@ pub fn slug(s: &str) -> String {
             out.push('_');
         }
     }
-    // a leading dot would make a hidden folder (".", ".." and ".x" names)
-    let out = out.trim_start_matches(['.', '_']).trim_end_matches('_').to_string();
+    // a leading dot would make a hidden folder (".", ".." and ".x" names); Windows drops a
+    // trailing dot, so the file would not be found again under the name given
+    let out: String = out.trim_start_matches(['.', '_']).trim_end_matches(['_', '.']).chars().take(80).collect();
+    let out = out.trim_end_matches(['_', '.']).to_string();
     if out.is_empty() {
         "untitled".into()
+    } else if reserved_on_windows(&out) {
+        // CON, NUL, COM1 … are devices on Windows, also with an extension
+        format!("{out}_")
     } else {
-        out.chars().take(80).collect()
+        out
     }
+}
+
+/// Windows' device names, which no file may have (with any extension): CON, PRN, AUX, NUL,
+/// COM1-9, LPT1-9.
+fn reserved_on_windows(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit() && stem.as_bytes()[3] != b'0')
+}
+
+/// Why Windows cannot store a file or folder of this name, if it cannot: the characters
+/// < > : " | ? * and control characters, a device name, or a trailing dot or space. A `:` in
+/// particular would silently write an NTFS stream, a hidden part of another file.
+pub fn windows_name_problem(name: &str) -> Option<String> {
+    if let Some(c) = name.chars().find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || c.is_control()) {
+        return Some(format!("'{name}' holds '{}', which Windows does not allow in a file name", c.escape_default()));
+    }
+    if reserved_on_windows(name) {
+        return Some(format!("'{name}' is a device name on Windows (CON, PRN, AUX, NUL, COM1-9, LPT1-9), so no file may be called that"));
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Some(format!("'{name}' ends with a dot or a space, which Windows drops from file names"));
+    }
+    None
 }
 
 impl Project {
@@ -169,6 +197,15 @@ impl Project {
         }
         if !norm.starts_with(&self.dir) {
             return Err(format!("'{rel}' is outside the project folder"));
+        }
+        if cfg!(windows) {
+            if let Ok(inside) = norm.strip_prefix(&self.dir) {
+                for c in inside.components() {
+                    if let Some(why) = windows_name_problem(&c.as_os_str().to_string_lossy()) {
+                        return Err(format!("{why}: choose another name for '{rel}'"));
+                    }
+                }
+            }
         }
         Ok(norm)
     }
@@ -269,6 +306,22 @@ pub fn is_image(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_windows_can_store() {
+        assert!(windows_name_problem("bad:name.txt").is_some(), "a colon writes an NTFS stream");
+        assert!(windows_name_problem("what?.txt").is_some());
+        assert!(windows_name_problem("CON.txt").is_some() && windows_name_problem("com1").is_some() && windows_name_problem("LPT9.log").is_some());
+        assert!(windows_name_problem("report.").is_some() && windows_name_problem("report ").is_some());
+        for ok in ["COM0.txt", "CONsole.txt", "รายงาน report 1.pdf", "a b (A&B).md", "beam_B1.json"] {
+            assert!(windows_name_problem(ok).is_none(), "{ok}");
+        }
+        // names made by slug are always storable
+        assert_eq!(slug("CON"), "CON_");
+        assert_eq!(slug("nul"), "nul_");
+        assert_eq!(slug("Beam v1."), "Beam_v1");
+        assert_eq!(slug("คาน B1 beam"), "คาน_B1_beam");
+    }
 
     #[test]
     fn resolve_stays_inside() {

@@ -656,7 +656,8 @@ fn snapshot(dir: &std::path::Path) -> std::collections::HashMap<PathBuf, std::ti
         let Ok(rd) = std::fs::read_dir(&d) else { continue };
         for e in rd.flatten() {
             let p = e.path();
-            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.') || n == "__pycache__") {
+            // the sessions folder holds the chat's own logs, written while the script runs
+            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.') || n == "__pycache__") || (d == dir && p.file_name().is_some_and(|n| n == "sessions")) {
                 continue;
             }
             if p.is_dir() {
@@ -771,8 +772,9 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let stdout = out_t.join().unwrap_or_default();
-    let stderr = err_t.join().unwrap_or_default();
+    // Python on Windows ends its lines with \r\n
+    let stdout = out_t.join().unwrap_or_default().replace("\r\n", "\n");
+    let stderr = err_t.join().unwrap_or_default().replace("\r\n", "\n");
     let secs = t0.elapsed().as_secs_f64();
 
     let mut changed: Vec<PathBuf> = snapshot(&ctx.project.dir).into_iter().filter(|(p, t)| before.get(p) != Some(t)).map(|(p, _)| p).collect();
@@ -785,7 +787,7 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
     };
     let pdir = std::fs::canonicalize(&ctx.project.dir).map(plain_path).unwrap_or_else(|_| ctx.project.dir.clone());
     let shown = match script.strip_prefix(&pdir) {
-        Ok(r) => r.display().to_string(),
+        Ok(r) => r.display().to_string().replace('\\', "/"),
         Err(_) if script.starts_with(&ctx.project.dir) => ctx.project.rel(&script),
         Err(_) => script.display().to_string(),
     };

@@ -135,6 +135,8 @@ impl Metrics {
     fn wrap(&self, s: &str, size: f32, f: Face, w: f32) -> Vec<String> {
         let mut out = vec![];
         for para in s.split('\n') {
+            // a Windows line break (\r\n) would leave a \r drawn as a missing glyph
+            let para = para.trim_end_matches('\r');
             let mut line = String::new();
             for word in para.split(' ') {
                 let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
