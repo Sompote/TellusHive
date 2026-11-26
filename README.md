@@ -23,7 +23,7 @@ Version 0.2.2 (developer preview), from the [release page](https://github.com/So
 | System | Download | What it is |
 |---|---|---|
 | Windows 10 or 11, 64-bit | [TellusHive-0.2.2-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.2/TellusHive-0.2.2-windows-x64.zip) | `tellushive.exe`, no installer needed |
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.0-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-macos-universal.zip) | `TellusHive.app`, one universal program (0.2.0; the 0.2.2 Mac build follows) |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.2-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.2/TellusHive-0.2.2-macos-universal.zip) | `TellusHive.app`, one universal program |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
