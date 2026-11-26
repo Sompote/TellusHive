@@ -160,6 +160,29 @@ pub fn tool_name(server: &str, tool: &str) -> String {
     n.chars().take(64).collect()
 }
 
+/// Makes a plugin's argument schema acceptable to every model: Gemini (also through
+/// Antigravity) refuses the whole request when one array has no `items`, which OpenAI-style
+/// models allow, so an array without them takes any item.
+pub fn fix_schema(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            let is_array = match m.get("type") {
+                Some(Value::String(t)) => t == "array",
+                Some(Value::Array(ts)) => ts.iter().any(|t| t == "array"),
+                _ => false,
+            };
+            if is_array && !m.get("items").is_some_and(|i| i.is_object()) {
+                m.insert("items".into(), json!({}));
+            }
+            for (_, x) in m.iter_mut() {
+                fix_schema(x);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(fix_schema),
+        _ => {}
+    }
+}
+
 struct McpTools;
 
 #[derive(Default)]
@@ -236,7 +259,17 @@ impl Plugin for McpTools {
             let all = spec.plugins.iter().any(|p| p == "*");
             for cfg in settings.plugins.iter().filter(|p| p.enabled && (all || spec.plugins.contains(&p.name)) && project.info.allows_plugin(&p.name)) {
                 match d.plugins.ensure_for(&settings, &cfg.name, Some(&project.dir)) {
-                    Ok(c) => found.push((cfg.name.clone(), c.tools.iter().map(|t| (t.name.clone(), tool_name(&cfg.name, &t.name), format!("[{}] {}", cfg.name, clip(&t.description, 1000)), t.input_schema.clone())).collect())),
+                    Ok(c) => found.push((
+                        cfg.name.clone(),
+                        c.tools
+                            .iter()
+                            .map(|t| {
+                                let mut schema = t.input_schema.clone();
+                                fix_schema(&mut schema);
+                                (t.name.clone(), tool_name(&cfg.name, &t.name), format!("[{}] {}", cfg.name, clip(&t.description, 1000)), schema)
+                            })
+                            .collect(),
+                    )),
                     Err(e) => {
                         // report a program that does not start once per agent, not at every step
                         if agent.with_state::<Reported, _>("mcp-errors", |r| r.0.insert(cfg.name.clone())) {
@@ -624,6 +657,22 @@ impl Plugin for UiBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arrays_without_items_take_any_item() {
+        // TellusLEM's schemas, which Gemini refuses with "items: missing field"
+        let mut s = json!({"type":"object","properties":{
+            "start":{"type":"array"},
+            "spatial":{"type":["array","null"]},
+            "layers":{"type":"array","items":{"type":"object","properties":{"bottom":{"type":"array"}}}},
+            "points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}}});
+        fix_schema(&mut s);
+        let p = &s["properties"];
+        assert_eq!(p["start"]["items"], json!({}));
+        assert_eq!(p["spatial"]["items"], json!({}));
+        assert_eq!(p["layers"]["items"]["properties"]["bottom"]["items"], json!({}));
+        assert_eq!(p["points"]["items"]["items"], json!({"type":"number"}), "a given item schema is kept");
+    }
 
     #[test]
     fn gateway_only_when_over_the_limit_and_largest_first() {

@@ -62,7 +62,7 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
             (None, Ok(_)) => format!("file {}", file.display()),
             (None, Err(e)) => format!("BUILT-IN FALLBACK ({e})"),
         };
-        let agents: Vec<String> = team.agents.iter().map(|a| format!("{}={}", a.id, if a.provider.is_empty() { format!("(default {}/{})", settings.default_provider, settings.default_model) } else { a.provider.clone() })).collect();
+        let agents: Vec<String> = team.agents.iter().map(|a| format!("{}={} plugins {:?}", a.id, if a.provider.is_empty() { format!("(default {}/{})", settings.default_provider, settings.default_model) } else { a.provider.clone() }, a.plugins)).collect();
         let line = format!(
             "{} pid {} agent {agent_id} data {} TELLUSHIVE_HOME {:?} team '{}' from {source}: {}\n",
             crate::engine::stamp(),
@@ -93,6 +93,22 @@ pub fn serve_mcp_with(project_dir: &Path, opt: &ServeOptions) -> Result<(), Stri
     // run_python is served too: the program runs with only these tools allowed, so its own
     // shell would wait for an approval nobody can give
     let toolset: Vec<_> = reg.resolve(&agent, &ctx);
+    // which plugins this server could drive: a program that does not start is reported to a
+    // chat this process does not have, so the log is the only place it shows
+    {
+        let mut per: std::collections::BTreeMap<String, usize> = Default::default();
+        for t in &toolset {
+            if let Some((server, _)) = t.name.split_once("__") {
+                *per.entry(server.to_string()).or_default() += 1;
+            }
+        }
+        let failed: Vec<String> = engine.plugins.state.lock().map(|m| m.iter().filter_map(|(n, s)| if let crate::PluginState::Failed(e) = s { Some(format!("{n}: {e}")) } else { None }).collect()).unwrap_or_default();
+        let line = format!("{} pid {} serves {} tools; plugin tools {:?}{}\n", crate::engine::stamp(), std::process::id(), toolset.len(), per, if failed.is_empty() { String::new() } else { format!("; FAILED {}", failed.join("; ")) });
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(project.dir.join("sessions/mcp-server.log")) {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
     let calls = Arc::new(AtomicU64::new(1));
     let served = toolset
         .iter()

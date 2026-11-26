@@ -767,13 +767,14 @@ pub fn embed(p: &Provider, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32
         .collect())
 }
 
-/// Lists the models a provider serves (for the settings combo box).
-pub fn list_models(p: &Provider) -> Result<Vec<String>, String> {
+/// Lists the models a provider serves (for the settings combo box). `agy` is Antigravity's
+/// program as found from Settings › Coding agents; `None` runs `agy` from PATH.
+pub fn list_models(p: &Provider, agy: Option<&std::path::Path>) -> Result<Vec<String>, String> {
     if p.base_url == "cli://claude-code" {
         return Ok(vec!["sonnet".into(), "opus".into(), "haiku".into()]);
     }
     if p.base_url == "cli://agy" {
-        return agy_models();
+        return agy_models(agy.unwrap_or(std::path::Path::new("agy")));
     }
     if p.is_cli() {
         return Ok(vec![]);
@@ -785,10 +786,12 @@ pub fn list_models(p: &Provider) -> Result<Vec<String>, String> {
 }
 
 /// The models Antigravity's CLI offers (`agy models`: one "<id>\t<name>" per line).
-fn agy_models() -> Result<Vec<String>, String> {
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-    let prog = [home.join(".local/bin/agy"), std::path::PathBuf::from("/opt/homebrew/bin/agy"), std::path::PathBuf::from("/usr/local/bin/agy")].into_iter().find(|p| p.is_file()).unwrap_or_else(|| "agy".into());
-    let out = std::process::Command::new(&prog).arg("models").output().map_err(|e| format!("cannot start agy: {e}"))?;
+fn agy_models(prog: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut cmd = std::process::Command::new(prog);
+    // no console window flashing up from the window app on Windows (CREATE_NO_WINDOW)
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000);
+    let out = cmd.arg("models").output().map_err(|e| format!("cannot start {}: {e}; set its path in Settings › Coding agents", prog.display()))?;
     let text = String::from_utf8_lossy(&out.stdout);
     let ids: Vec<String> = text.lines().filter_map(|l| l.split('\t').next()).map(str::trim).filter(|id| !id.is_empty() && !id.contains(' ') && !id.ends_with("...")).map(String::from).collect();
     if ids.is_empty() {

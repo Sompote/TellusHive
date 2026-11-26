@@ -6,6 +6,7 @@
 
 use eframe::egui::{self, text::LayoutJob, Color32, FontFamily, FontId, TextFormat};
 
+use crate::latex;
 use crate::theme::Tokens;
 
 /// Shows `text` as Markdown in the theme's colours. Returns the target of a link clicked
@@ -33,6 +34,35 @@ pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) -> Option<String> {
             });
             first = false;
             continue;
+        }
+        // display math: $$…$$ or \[…\] on one line, or opened on this line and closed later
+        if let Some(body) = latex::display_line(trimmed) {
+            i += 1;
+            math_block(ui, body, size, t);
+            first = false;
+            continue;
+        }
+        if let Some(close) = latex::display_open(trimmed) {
+            let mut body = vec![trimmed.trim_start_matches("$$").trim_start_matches("\\[").to_string()];
+            let mut j = i + 1;
+            let mut closed = false;
+            while j < lines.len() {
+                let l = lines[j].trim();
+                j += 1;
+                if let Some(head) = l.strip_suffix(close) {
+                    body.push(head.to_string());
+                    closed = true;
+                    break;
+                }
+                body.push(l.to_string());
+            }
+            // an opener that is never closed is text
+            if closed {
+                i = j;
+                math_block(ui, &body.join("\n"), size, t);
+                first = false;
+                continue;
+            }
         }
         // table: consecutive lines that start with '|'
         if trimmed.starts_with('|') && trimmed.matches('|').count() >= 2 {
@@ -93,6 +123,43 @@ pub fn show(ui: &mut egui::Ui, text: &str, t: &Tokens) -> Option<String> {
         text_line(ui, trimmed, size, t.text, false, t, &mut clicked);
     }
     clicked
+}
+
+/// A display formula, on its own indented line, a little larger than the text.
+fn math_block(ui: &mut egui::Ui, src: &str, size: f32, t: &Tokens) {
+    let mut j = LayoutJob::default();
+    append_math(&mut j, src, size + 1.0, t.text, false, t);
+    j.wrap.max_width = f32::INFINITY;
+    ui.add_space(size * 0.2);
+    ui.horizontal(|ui| {
+        ui.add_space(size * 1.5);
+        ui.add(egui::Label::new(j).wrap());
+    });
+    ui.add_space(size * 0.2);
+}
+
+/// A formula's text into `job`: symbols as characters, exponents raised and indices lowered
+/// in a smaller size.
+fn append_math(job: &mut LayoutJob, src: &str, size: f32, color: Color32, bold: bool, t: &Tokens) {
+    for (s, k) in latex::render(src) {
+        let small = size * 0.72;
+        let font = match (k, bold) {
+            (latex::Script::Normal, true) => crate::theme::medium_font(size),
+            (latex::Script::Normal, false) => FontId::new(size, FontFamily::Proportional),
+            (_, true) => crate::theme::medium_font(small),
+            (_, false) => FontId::new(small, FontFamily::Proportional),
+        };
+        let mut f = TextFormat::simple(font, color);
+        if bold && color == t.text {
+            f.color = if t.dark { Color32::WHITE } else { Color32::BLACK };
+        }
+        f.valign = match k {
+            latex::Script::Normal => egui::Align::Center,
+            latex::Script::Sup => egui::Align::TOP,
+            latex::Script::Sub => egui::Align::BOTTOM,
+        };
+        job.append(&s, 0.0, f);
+    }
 }
 
 /// One wrapped line. With links in it, the line is clickable, and the pointer turns into a
@@ -292,6 +359,15 @@ fn job_links(s: &str, size: f32, color: Color32, strong: bool, t: &Tokens) -> (L
     let mut k = 0;
     while k < chars.len() {
         let c = chars[k];
+        // math: $…$, $$…$$, \(…\) and \[…\] within the line
+        if !code && (c == '$' || c == '\\') {
+            if let Some((body, next, _)) = latex::span_at(&chars, k) {
+                flush(&mut job, &mut buf, bold, italic, code);
+                append_math(&mut job, &body, size, color, bold, t);
+                k = next;
+                continue;
+            }
+        }
         // a backslash escapes Markdown punctuation: \| \* \` \_ \# and the like
         if c == '\\' && !code && chars.get(k + 1).is_some_and(|n| n.is_ascii_punctuation()) {
             buf.push(chars[k + 1]);
@@ -350,6 +426,31 @@ mod tests {
         // escaped pipes stay in their cell and show as pipes
         assert_eq!(split_row("| Drawdown | plastic | max \\|u\\| = 19.5 mm |"), ["Drawdown", "plastic", "max \\|u\\| = 19.5 mm"]);
         assert_eq!(job("max \\|u\\| = 19.5 mm, 2 \\* 3", 13.0, Color32::GRAY, false, &t).text, "max |u| = 19.5 mm, 2 * 3");
+    }
+
+    #[test]
+    fn math_in_a_line() {
+        let t = Tokens::get(&egui::Context::default());
+        let j = job(r"Height $H = 3\text{ m}$, so $\phi M_n \ge M_u$ costs $5 and $10.", 13.0, Color32::GRAY, false, &t);
+        assert_eq!(j.text, "Height H = 3 m, so ϕMn ≥ Mu costs $5 and $10.");
+        // the index is lowered and smaller
+        let n = j.sections.iter().find(|s| &j.text[s.byte_range.clone()] == "n").expect("index n");
+        assert_eq!(n.format.valign, egui::Align::BOTTOM);
+        assert!(n.format.font_id.size < 13.0);
+        assert_eq!(job(r"\(\theta = 30^\circ\)", 13.0, Color32::GRAY, false, &t).text, "θ = 30°");
+        // an escaped dollar stays a dollar
+        assert_eq!(job(r"\$20 and \$30", 13.0, Color32::GRAY, false, &t).text, "$20 and $30");
+    }
+
+    #[test]
+    fn math_symbols_have_glyphs() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let _ = ctx.run(Default::default(), |_| {});
+        let all = "αβγδϵεζηθϑικλμνξπϖρϱσςτυϕφχψωΓΔΘΛΞΠΣΥΦΨΩℓℏ∂∇∞′°∘Å×·÷±∓∗⋆•≤≥≪≫≠≈∼≃≅≡∝→←⇒⇐↔⇔↑↓↦Σ∏∫∬∮∈∉⊂⊆∪∩∅∀∃¬∧∨∠⊥∥∴∵…⋮⋱⟨⟩⌈⌉⌊⌋‖√−ℝℕℤℚℂ✓";
+        let font = FontId::new(13.0, FontFamily::Proportional);
+        let missing: String = ctx.fonts(|f| all.chars().filter(|c| !f.has_glyphs(&font, &c.to_string())).collect());
+        assert!(missing.is_empty(), "no glyph for: {missing}");
     }
 
     #[test]

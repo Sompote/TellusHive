@@ -17,6 +17,39 @@ use serde_json::{json, Value};
 
 pub const PROTOCOL: &str = "2025-03-26";
 
+/// On Windows a program started from the window (which has no console) would open a console
+/// window of its own; this keeps it hidden. A program with its own window still shows it.
+pub fn hide_console(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// The program to start for a command as written in a plugin's settings. On Windows a bare
+/// name such as `npx` or `uvx` is often a `.cmd` script, which starting the name alone does
+/// not find (only `.exe` is tried), so the PATH is searched for each of PATHEXT's endings.
+pub fn resolve_command(command: &str) -> std::path::PathBuf {
+    let p = std::path::PathBuf::from(command);
+    if !cfg!(windows) || p.extension().is_some() || p.components().count() > 1 {
+        return p;
+    }
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        for ext in exts.split(';').filter(|e| !e.is_empty()) {
+            let c = dir.join(format!("{command}{}", ext.to_ascii_lowercase()));
+            if c.is_file() {
+                return c;
+            }
+        }
+    }
+    p
+}
+
 /// How to start or reach a server; the "plugins" an agent can be equipped with.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -293,7 +326,8 @@ fn write_line(w: &mut impl Write, v: &Value) -> Result<(), String> {
 }
 
 fn spawn_stdio(cfg: &ServerConfig) -> Result<Transport, String> {
-    let mut cmd = Command::new(&cfg.command);
+    let mut cmd = Command::new(resolve_command(&cfg.command));
+    hide_console(&mut cmd);
     cmd.args(&cfg.args).envs(&cfg.env).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if !cfg.cwd.trim().is_empty() {
         cmd.current_dir(&cfg.cwd);
@@ -520,6 +554,16 @@ mod tests {
         assert!(!r.is_error);
     }
 
+    /// A stdio server in a script: the shell one, or on Windows (no `sh`) the PowerShell one.
+    fn script_server(name: &str, sh: &str, ps: &str) -> ServerConfig {
+        let (command, args) = if cfg!(windows) {
+            ("powershell", vec!["-NoProfile".to_string(), "-NonInteractive".into(), "-Command".into(), ps.into()])
+        } else {
+            ("sh", vec!["-c".to_string(), sh.into()])
+        };
+        ServerConfig { name: name.into(), command: command.into(), args, enabled: true, ..Default::default() }
+    }
+
     /// Stop interrupts a long tool call: a server that goes on calculating and ignores the
     /// cancel notice is ended within a few seconds, not after its 30-minute timeout.
     #[test]
@@ -532,7 +576,15 @@ mod tests {
     *tools/call*) sleep 120;;
   esac
 done"#;
-        let cfg = ServerConfig { name: "slow".into(), command: "sh".into(), args: vec!["-c".into(), script.into()], enabled: true, timeout_s: 1800, ..Default::default() };
+        let ps = r#"
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $id = if ($line -match '"id":(\d+)') { $Matches[1] } else { '' }
+  if ($line -like '*initialize*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"serverInfo":{"name":"slow"},"capabilities":{}}}') }
+  elseif ($line -like '*tools/list*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"tools":[{"name":"calculate","description":"c","inputSchema":{"type":"object"}}]}}') }
+  elseif ($line -like '*tools/call*') { Start-Sleep -Seconds 120 }
+  [Console]::Out.Flush()
+}"#;
+        let cfg = ServerConfig { timeout_s: 1800, ..script_server("slow", script, ps) };
         let c = Client::connect(&cfg).unwrap();
         let stop = std::sync::Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
@@ -573,7 +625,15 @@ done"#;
     *tools/call*) printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id";;
   esac
 done"#;
-        let cfg = ServerConfig { name: "fake".into(), command: "sh".into(), args: vec!["-c".into(), script.into()], enabled: true, ..Default::default() };
+        let ps = r#"
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $id = if ($line -match '"id":(\d+)') { $Matches[1] } else { '' }
+  if ($line -like '*initialize*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"serverInfo":{"name":"fake"},"capabilities":{}}}') }
+  elseif ($line -like '*tools/list*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"tools":[{"name":"echo","description":"e","inputSchema":{"type":"object"}}]}}') }
+  elseif ($line -like '*tools/call*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"content":[{"type":"text","text":"pong"}]}}') }
+  [Console]::Out.Flush()
+}"#;
+        let cfg = script_server("fake", script, ps);
         let c = Client::connect(&cfg).unwrap();
         assert_eq!(c.server_name, "fake");
         assert_eq!(c.tools[0].name, "echo");

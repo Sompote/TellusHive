@@ -792,8 +792,20 @@ pub fn to_hex(c: Color32) -> String {
 pub fn open_path(p: &std::path::Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(p).spawn();
+    // the shell opens a file, folder or web address in its program, as a double click does
+    // (cmd's `start` flashed a console and misread paths with & ^ %)
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/C", "start", ""]).arg(p).spawn();
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let s = p.to_string_lossy();
+        let target = if s.contains("://") || s.starts_with("mailto:") { s.to_string() } else { s.replace('/', "\\") };
+        let wide = |x: &str| std::ffi::OsStr::new(x).encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+        let (verb, file) = (wide("open"), wide(&target));
+        // SAFETY: both strings are NUL-terminated UTF-16 that live through the call
+        unsafe {
+            windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
+        }
+    }
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(p).spawn();
 }

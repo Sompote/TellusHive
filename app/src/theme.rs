@@ -249,12 +249,17 @@ pub fn install_fonts(ctx: &egui::Context) {
     add(&mut f, "JetBrainsMono", include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf"));
     // Thai script (Inter and JetBrains Mono have no Thai glyphs), tried after the main font
     add(&mut f, "NotoSansThai", include_bytes!("../../assets/fonts/NotoSansThai-Regular.ttf"));
+    // the formulas in the replies (≡ ∈ ∠ ⟨⟩ ℝ …), which Inter and egui's fonts lack
+    add(&mut f, "NotoSansMath", include_bytes!("../../assets/fonts/NotoSansMath-Regular.ttf"));
     // egui's own fonts stay as fallbacks (symbols, emoji)
     let fallback = f.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     f.families.entry(FontFamily::Proportional).or_default().splice(0..0, ["Inter".to_string(), "NotoSansThai".to_string()]);
+    f.families.entry(FontFamily::Proportional).or_default().push("NotoSansMath".to_string());
     f.families.entry(FontFamily::Monospace).or_default().splice(0..0, ["JetBrainsMono".to_string(), "NotoSansThai".to_string()]);
+    f.families.entry(FontFamily::Monospace).or_default().push("NotoSansMath".to_string());
     let mut med = vec!["InterMedium".to_string(), "Inter".to_string(), "NotoSansThai".to_string()];
     med.extend(fallback);
+    med.push("NotoSansMath".to_string());
     f.families.insert(medium(), med);
     ctx.set_fonts(f);
 }

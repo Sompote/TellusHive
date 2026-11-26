@@ -595,7 +595,36 @@ pub fn find_python(settings: &Settings) -> Option<PathBuf> {
         return p.is_file().then_some(p);
     }
     let home = dirs::home_dir().unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = std::env::var("PATH").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).filter(|d| !d.as_os_str().is_empty()).collect();
+    if cfg!(windows) {
+        // python.org's installer (per user and for all users), conda, and the py launcher
+        let mut installs: Vec<PathBuf> = vec![];
+        for base in [dirs::data_local_dir().map(|d| d.join("Programs").join("Python")), std::env::var_os("ProgramFiles").map(PathBuf::from)].into_iter().flatten() {
+            if let Ok(rd) = std::fs::read_dir(&base) {
+                installs.extend(rd.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().starts_with("python3"))));
+            }
+        }
+        // the newest version first (Python313 before Python39)
+        installs.sort_by_key(|p| std::cmp::Reverse(p.file_name().map(|n| n.to_string_lossy().trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u32>().unwrap_or(0)).unwrap_or(0)));
+        dirs.extend(installs);
+        for d in ["miniconda3", "miniforge3", "anaconda3", "mambaforge"] {
+            dirs.push(home.join(d));
+        }
+        dirs.push(PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())));
+        // the Microsoft Store's aliases last: without Python installed they only open the Store
+        let (store, rest): (Vec<PathBuf>, Vec<PathBuf>) = dirs.into_iter().partition(|d| d.to_string_lossy().to_ascii_lowercase().contains("windowsapps"));
+        dirs = rest.into_iter().chain(store).collect();
+        for d in &dirs {
+            for name in ["python.exe", "python3.exe", "py.exe"] {
+                let p = d.join(name);
+                // a Store alias is a link that only symlink_metadata sees
+                if p.is_file() || std::fs::symlink_metadata(&p).is_ok() {
+                    return Some(p);
+                }
+            }
+        }
+        return None;
+    }
     for d in ["miniconda3/bin", "miniforge3/bin", "anaconda3/bin", "mambaforge/bin", ".pyenv/shims", ".local/bin"] {
         dirs.push(home.join(d));
     }
@@ -606,6 +635,17 @@ pub fn find_python(settings: &Settings) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// `canonicalize` on Windows gives `\\?\C:\…`, which some programs (cmd, older Python
+/// packages) cannot use as a working folder; the plain form is kept when there is one.
+pub fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        Some(rest) if rest.starts_with("UNC\\") => PathBuf::from(format!(r"\\{}", &rest[4..])),
+        _ => p,
+    }
 }
 
 /// Modification times of the project's files (hidden files skipped), to report what a script wrote.
@@ -642,7 +682,7 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     // the script runs with work/ as its working directory, so a relative project path
     // (a project opened as `run --project some/dir`) must be made absolute first
-    let work = std::fs::canonicalize(&work).map_err(|e| format!("cannot resolve {}: {e}", work.display()))?;
+    let work = plain_path(std::fs::canonicalize(&work).map_err(|e| format!("cannot resolve {}: {e}", work.display()))?);
     let script = if let Some(code) = a.get("code").and_then(|c| c.as_str()).filter(|c| !c.trim().is_empty()) {
         let name = slug(arg_str(a, "name").unwrap_or("script").trim_end_matches(".py"));
         let p = work.join("py").join(format!("{name}.py"));
@@ -683,7 +723,7 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
 
     let before = snapshot(&ctx.project.dir);
     let t0 = Instant::now();
-    let mut child = Command::new(&python)
+    let mut child = th_mcp::hide_console(&mut Command::new(&python))
         .arg(&script)
         .args(&args)
         .current_dir(&work)
@@ -743,7 +783,7 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
         let c: Vec<char> = s.chars().collect();
         if c.len() <= n { s.to_string() } else { format!("…[{} earlier characters cut]\n{}", c.len() - n, c[c.len() - n..].iter().collect::<String>()) }
     };
-    let pdir = std::fs::canonicalize(&ctx.project.dir).unwrap_or_else(|_| ctx.project.dir.clone());
+    let pdir = std::fs::canonicalize(&ctx.project.dir).map(plain_path).unwrap_or_else(|_| ctx.project.dir.clone());
     let shown = match script.strip_prefix(&pdir) {
         Ok(r) => r.display().to_string(),
         Err(_) if script.starts_with(&ctx.project.dir) => ctx.project.rel(&script),
@@ -772,6 +812,15 @@ fn run_python(ctx: &Ctx, a: &Value) -> Result<ToolOut, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verbatim_paths_become_plain() {
+        use super::plain_path;
+        use std::path::PathBuf;
+        assert_eq!(plain_path(PathBuf::from(r"\\?\C:\Users\me\proj\work")), PathBuf::from(r"C:\Users\me\proj\work"));
+        assert_eq!(plain_path(PathBuf::from(r"\\?\UNC\server\share\proj")), PathBuf::from(r"\\server\share\proj"));
+        assert_eq!(plain_path(PathBuf::from("/Users/me/proj")), PathBuf::from("/Users/me/proj"));
+    }
+
     #[test]
     fn sheet_facts_carry_inputs_results_and_checks() {
         use super::{calc, fmt4, json, sheet_facts};

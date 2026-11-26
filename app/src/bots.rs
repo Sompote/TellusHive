@@ -96,6 +96,8 @@ pub struct BotsView {
     teams_at: Option<Instant>,
     /// A team the engineer picked in the rail to talk to (the app switches to it).
     pub pick_team: Option<String>,
+    /// A coding agent's program path set in a bot's Setup (the app stores it in Settings).
+    pub set_program: Option<(th_harness::external::Which, String)>,
     /// The Teams section of the rail is open (hidden by default).
     teams_open: bool,
     /// "List models" of a bot's own API: (bot id, result).
@@ -107,7 +109,7 @@ impl Default for BotsView {
     fn default() -> Self {
         let bots = Bot::list();
         let selected = bots.first().map(|b| b.id.clone());
-        BotsView { office: bots.is_empty(), bots, project_edited: None, slots: HashMap::new(), selected, profile: false, tab: Tab::Activity, dirty: None, confirm_delete: false, confirm_new: None, status: String::new(), teams: vec![], teams_at: None, pick_team: None, teams_open: false, models: None, models_rx: None }
+        BotsView { office: bots.is_empty(), bots, project_edited: None, slots: HashMap::new(), selected, profile: false, tab: Tab::Activity, dirty: None, confirm_delete: false, confirm_new: None, status: String::new(), teams: vec![], teams_at: None, pick_team: None, set_program: None, teams_open: false, models: None, models_rx: None }
     }
 }
 
@@ -166,11 +168,24 @@ impl BotsView {
                 chrome::open_path(&p);
             }
         }
+        let mut changed = false;
         for (id, p) in synced {
             if let Some(b) = self.bots.iter_mut().find(|b| b.id == id) {
                 if b.take_bundle(&p) {
                     self.dirty = Some(Instant::now());
                     self.project_edited = Some(p.dir.clone());
+                    changed = true;
+                }
+            }
+        }
+        // the engines run the team built when they opened: without this, a plugin the bot
+        // switched on from the chat never reaches its agent (nor a coding agent's tool server)
+        if changed {
+            for (sid, slot) in self.slots.iter() {
+                if let Some(sb) = self.bots.iter().find(|x| &x.id == sid) {
+                    if let Ok(mut t) = slot.engine.team.write() {
+                        *t = sb.team_spec(&self.bots);
+                    }
                 }
             }
         }
@@ -840,7 +855,7 @@ impl BotsView {
                         let bid = b.id.clone();
                         let ctx = ui.ctx().clone();
                         std::thread::spawn(move || {
-                            let _ = tx.send((bid, th_llm::list_models(&pc)));
+                            let _ = tx.send((bid, th_llm::list_models(&pc, None)));
                             ctx.request_repaint();
                         });
                     }
@@ -859,6 +874,37 @@ impl BotsView {
                         }
                     });
                 });
+                let chosen = if b.provider.is_empty() { &settings.default_provider } else { &b.provider };
+                if let Some(p) = settings.providers.iter().find(|p| &p.name == chosen && p.is_cli()) {
+                    use th_harness::external::{find_program, Which};
+                    let which = Which::of_provider(&p.base_url);
+                    let program = which.program();
+                    let mut path = which.config(settings).path;
+                    ui.horizontal(|ui| {
+                        chrome::row_label(ui, "Program");
+                        let edit = ui.add_sized([ui.available_width() - 84.0, 26.0], egui::TextEdit::singleline(&mut path).hint_text(format!("empty = find '{program}' on PATH")).vertical_align(egui::Align::Center));
+                        if edit.on_hover_text("The program file, or the folder that holds it. Shared by every bot and agent that uses this provider (Settings › Coding agents)").changed() {
+                            self.set_program = Some((which, path.clone()));
+                        }
+                        if ui.add_sized([76.0, 26.0], egui::Button::new("Browse…")).clicked() {
+                            let mut dlg = rfd::FileDialog::new().set_title(format!("Where is {program}?"));
+                            if cfg!(windows) {
+                                dlg = dlg.add_filter("Program", &["exe", "cmd", "bat"]).add_filter("All files", &["*"]);
+                            }
+                            if let Some(f) = dlg.pick_file() {
+                                self.set_program = Some((which, f.display().to_string()));
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        chrome::row_label(ui, "");
+                        match find_program(program, &path) {
+                            Some(f) => ui.label(RichText::new(format!("found: {}", f.display())).size(11.5).color(t.ok)),
+                            None if path.trim().is_empty() => ui.label(RichText::new(format!("'{program}' not found on PATH: choose it with Browse…")).size(11.5).color(t.error)),
+                            None => ui.label(RichText::new(format!("nothing named '{program}' at this path")).size(11.5).color(t.error)),
+                        };
+                    });
+                }
             }
             let default_model = b.own_api.as_ref().map(|p| p.default_model.clone()).filter(|m| !m.is_empty());
             ui.horizontal(|ui| {

@@ -122,6 +122,7 @@ impl SettingsView {
 
     fn models_ui(&mut self, ui: &mut egui::Ui, s: &mut Settings) {
         let t = tokens(ui);
+        let agy_path = s.agy.path.clone();
         group(ui, "Default model", "for agents that do not choose one", |ui| {
             ui.horizontal(|ui| {
                 chrome::row_label(ui, "Provider");
@@ -150,10 +151,82 @@ impl SettingsView {
             let name = s.providers[i].name.clone();
             if s.providers[i].is_cli() {
                 group(ui, &format!("Provider: {name}"), "no key", |ui| {
-                    let program = if name == "codex" { "Codex" } else { "Claude Code" };
-                    chrome::hint(ui, &format!("An agent with this provider runs {program} as its model, on your {program} login instead of an API key. {program} gets that agent's tools (calculations, standards, drawings, its plugins, delegate) through this program's MCP server. Its path, arguments, time limit and the \"use my subscription\" switch are under External agents."));
+                    let program = match s.providers[i].base_url.as_str() {
+                        "cli://codex" => "Codex",
+                        "cli://agy" => "Antigravity",
+                        _ => "Claude Code",
+                    };
+                    chrome::hint(ui, &format!("An agent with this provider runs {program} as its model, on your {program} login instead of an API key. {program} gets that agent's tools (calculations, standards, drawings, its plugins, delegate) through this program's MCP server. Its program path, arguments and time limit are under Coding agents."));
+                    let (exe, cfg) = match program {
+                        "Codex" => ("codex", &mut s.codex),
+                        "Antigravity" => ("agy", &mut s.agy),
+                        _ => ("claude", &mut s.claude_code),
+                    };
+                    ui.horizontal(|ui| {
+                        chrome::row_label(ui, "Program");
+                        ui.add_sized([ui.available_width() - 84.0, 28.0], egui::TextEdit::singleline(&mut cfg.path).hint_text(format!("empty = find '{exe}' on PATH")).vertical_align(egui::Align::Center).margin(egui::Margin::symmetric(8, 0)))
+                            .on_hover_text("The program file, or the folder that holds it. The same setting as under Coding agents");
+                        if ui.add_sized([76.0, 28.0], egui::Button::new("Browse…")).clicked() {
+                            let mut dlg = rfd::FileDialog::new().set_title(format!("Where is {program}?"));
+                            if cfg!(windows) {
+                                dlg = dlg.add_filter("Program", &["exe", "cmd", "bat"]).add_filter("All files", &["*"]);
+                            }
+                            if let Some(f) = dlg.pick_file() {
+                                cfg.path = f.display().to_string();
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        chrome::row_label(ui, "");
+                        match find_program(exe, &cfg.path) {
+                            Some(f) => ui.label(RichText::new(format!("found: {}", f.display())).size(11.5).color(t.ok)),
+                            None if cfg.path.trim().is_empty() => ui.label(RichText::new(format!("'{exe}' not found on PATH: choose it with Browse…")).size(11.5).color(t.error)),
+                            None => ui.label(RichText::new(format!("nothing named '{exe}' at this path")).size(11.5).color(t.error)),
+                        };
+                    });
+                    let agy_path = s.agy.path.clone();
                     chrome::field(ui, "Model", &mut s.providers[i].default_model);
-                    chrome::hint(ui, if name == "codex" { "Empty = Codex's default model." } else { "Empty = Claude Code's default; or sonnet, opus, haiku." });
+                    chrome::hint(ui, match program {
+                        "Codex" => "Empty = Codex's default model.",
+                        "Antigravity" => "Empty = Antigravity's default model.",
+                        _ => "Empty = Claude Code's default; or sonnet, opus, haiku.",
+                    });
+                    if program == "Antigravity" {
+                        ui.horizontal(|ui| {
+                            chrome::row_label(ui, "");
+                            if ui.add_enabled(self.models_rx.is_none(), egui::Button::new("List models")).on_hover_text("Runs `agy models`, which also checks that the program is found").clicked() {
+                                let (tx, rx) = mpsc::channel();
+                                self.models_rx = Some(rx);
+                                let pc = s.providers[i].clone();
+                                let ctx = ui.ctx().clone();
+                                let agy = find_program("agy", &agy_path);
+                                std::thread::spawn(move || {
+                                    let r = th_llm::list_models(&pc, agy.as_deref());
+                                    let _ = tx.send((pc.name.clone(), r));
+                                    ctx.request_repaint();
+                                });
+                            }
+                        });
+                        match self.models.get(&name) {
+                            Some(Ok(m)) => {
+                                let p = &mut s.providers[i];
+                                ui.horizontal(|ui| {
+                                    chrome::row_label(ui, "");
+                                    egui::ComboBox::from_id_salt(("models", i)).selected_text(format!("{} models: pick the default", m.len())).height(320.0).width(300.0).show_ui(ui, |ui| {
+                                        for id in m {
+                                            if ui.selectable_label(p.default_model == *id, id).clicked() {
+                                                p.default_model = id.clone();
+                                            }
+                                        }
+                                    });
+                                });
+                            }
+                            Some(Err(e)) => {
+                                ui.label(RichText::new(e).size(11.5).color(t.error));
+                            }
+                            None => {}
+                        }
+                    }
                 });
                 continue;
             }
@@ -200,8 +273,9 @@ impl SettingsView {
                         self.models_rx = Some(rx);
                         let pc = p.clone();
                         let ctx = ui.ctx().clone();
+                        let agy = find_program("agy", &agy_path);
                         std::thread::spawn(move || {
-                            let r = th_llm::list_models(&pc);
+                            let r = th_llm::list_models(&pc, agy.as_deref());
                             let _ = tx.send((pc.name.clone(), r));
                             ctx.request_repaint();
                         });
@@ -255,11 +329,33 @@ impl SettingsView {
                 None => "not found".into(),
             };
             group(ui, title, &ctxt, |ui| {
+                let t = tokens(ui);
                 chrome::switch_row(ui, if which == 2 { "Enabled (as an agent's model)" } else { "Enabled (as a worker tool and as an agent's model)" }, &mut cfg.enabled);
                 if which < 2 {
                     chrome::switch_row(ui, if which == 0 { "Use my Claude subscription (ignore ANTHROPIC_API_KEY)" } else { "Use my ChatGPT subscription (ignore OPENAI_API_KEY)" }, &mut cfg.subscription);
                 }
-                chrome::field(ui, "Program", &mut cfg.path).on_hover_text("Empty = search PATH and the usual install folders");
+                ui.horizontal(|ui| {
+                    chrome::row_label(ui, "Program");
+                    ui.add_sized([ui.available_width() - 84.0, 28.0], egui::TextEdit::singleline(&mut cfg.path).hint_text(format!("empty = find '{program}' on PATH")).vertical_align(egui::Align::Center).margin(egui::Margin::symmetric(8, 0)))
+                        .on_hover_text("The program file, or the folder that holds it. Empty = search PATH and the usual install folders");
+                    if ui.add_sized([76.0, 28.0], egui::Button::new("Browse…")).clicked() {
+                        let mut dlg = rfd::FileDialog::new().set_title(format!("Where is {title}?"));
+                        if cfg!(windows) {
+                            dlg = dlg.add_filter("Program", &["exe", "cmd", "bat"]).add_filter("All files", &["*"]);
+                        }
+                        if let Some(f) = dlg.pick_file() {
+                            cfg.path = f.display().to_string();
+                        }
+                    }
+                });
+                if found.is_none() {
+                    let msg = if cfg.path.trim().is_empty() {
+                        format!("'{program}' is not on PATH or in the usual install folders. Install it, or choose the program with Browse….")
+                    } else {
+                        format!("Nothing named '{program}' at this path. Choose the program file itself, or the folder that holds it.")
+                    };
+                    ui.label(RichText::new(msg).size(11.5).color(t.error));
+                }
                 let txt = args_slot.get_or_insert_with(|| cfg.args.join(" "));
                 if chrome::field(ui, "Arguments", txt).changed() {
                     cfg.args = split_args(txt);

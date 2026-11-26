@@ -1004,7 +1004,7 @@ impl App {
                 let _ = c.wait();
             }
         }
-        let spawned = std::process::Command::new(&cmd)
+        let spawned = th_mcp::hide_console(&mut std::process::Command::new(&cmd))
             .arg(&model)
             .current_dir(model.parent().unwrap_or(&self.project.dir))
             .stdin(std::process::Stdio::null())
@@ -1768,6 +1768,15 @@ impl eframe::App for App {
                     let show = self.bots.ui(ctx, &engine, &self.settings, &skills, &dir, &office);
                     if let Some(name) = self.bots.pick_team.take() {
                         self.select_team(&name);
+                    }
+                    if let Some((which, path)) = self.bots.set_program.take() {
+                        use th_harness::external::Which;
+                        match which {
+                            Which::ClaudeCode => self.settings.claude_code.path = path,
+                            Which::Codex => self.settings.codex.path = path,
+                            Which::Agy => self.settings.agy.path = path,
+                        }
+                        self.apply_settings();
                     }
                     if show {
                         self.design_ws(ctx);

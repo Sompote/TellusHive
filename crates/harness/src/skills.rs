@@ -188,7 +188,8 @@ pub fn install(src: &Path, dest: &Path, replace: bool) -> Result<Skill, String> 
             return Err(format!("{} is not a skill: choose a skill folder, its SKILL.md, or a .skill or .zip file", src.display()));
         }
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        let out = std::process::Command::new("tar").arg("-xf").arg(src).arg("-C").arg(&tmp).output().map_err(|e| format!("cannot unpack {}: {e}", src.display()))?;
+        // tar unpacks a zip too (bsdtar, also in Windows 10 and later)
+        let out = th_mcp::hide_console(&mut std::process::Command::new("tar")).arg("-xf").arg(src).arg("-C").arg(&tmp).output().map_err(|e| format!("cannot unpack {}: {e}", src.display()))?;
         if !out.status.success() {
             return Err(format!("cannot unpack {}: {}", src.display(), String::from_utf8_lossy(&out.stderr).trim()));
         }

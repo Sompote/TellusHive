@@ -1173,7 +1173,7 @@ fn step_line(ui: &mut egui::Ui, row: &(String, Option<(bool, String)>), t: &crat
 pub fn friendly(tool: &str, args: &str, names: &std::collections::HashMap<String, String>, live: bool) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|x| short(x, 60)).filter(|x| !x.is_empty());
-    let file = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|p| p.rsplit('/').next().unwrap_or(p).to_string()).filter(|x| !x.is_empty());
+    let file = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|p| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string()).filter(|x| !x.is_empty());
     let who = |id: &str| names.get(id).cloned().unwrap_or_else(|| capital(&id.replace('_', " ")));
     let with = |base: &str, d: Option<String>| match d {
         Some(d) => format!("{base}: {d}"),

@@ -642,7 +642,7 @@ impl Engine {
 fn pid_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"]).output();
+        let out = th_mcp::hide_console(&mut std::process::Command::new("tasklist")).args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"]).output();
         out.map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\""))).unwrap_or(false)
     }
     #[cfg(not(windows))]

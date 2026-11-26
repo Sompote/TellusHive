@@ -50,18 +50,37 @@ impl Which {
 }
 
 /// Finds a program on PATH, also in the usual install folders a GUI app does not inherit.
+/// The configured path may be the program itself, the program without `.exe`/`.cmd`, or the
+/// folder that holds it, and may carry the quotes Windows' "Copy as path" adds.
 pub fn find_program(name: &str, configured: &str) -> Option<PathBuf> {
-    if !configured.trim().is_empty() {
-        let p = PathBuf::from(configured.trim());
-        return p.exists().then_some(p);
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), format!("{name}.cmd"), name.to_string()] } else { vec![name.to_string()] };
+    let configured = configured.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    if !configured.is_empty() {
+        let p = PathBuf::from(configured);
+        if p.is_file() {
+            return Some(p);
+        }
+        if p.is_dir() {
+            return [p.clone(), p.join("bin")].into_iter().flat_map(|d| names.iter().map(move |n| d.join(n)).collect::<Vec<_>>()).find(|c| c.is_file());
+        }
+        if cfg!(windows) {
+            return ["exe", "cmd"].into_iter().map(|e| p.with_extension(e)).find(|c| c.is_file());
+        }
+        return None;
     }
     let home = dirs::home_dir().unwrap_or_default();
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
-    dirs.extend([home.join(".local/bin"), home.join(".npm-global/bin"), home.join(".cargo/bin"), PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
+    dirs.extend([home.join(".local/bin"), home.join(".npm-global/bin"), home.join(".cargo/bin"), home.join(".antigravity/bin"), PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
     #[cfg(windows)]
-    if let Some(app) = dirs::data_dir() {
-        // npm installs claude.cmd / codex.cmd here
-        dirs.push(app.join("npm"));
+    {
+        if let Some(app) = dirs::data_dir() {
+            // npm installs claude.cmd / codex.cmd here
+            dirs.push(app.join("npm"));
+        }
+        if let Some(local) = dirs::data_local_dir() {
+            // winget's command links, and the Antigravity installer's own folder
+            dirs.extend([local.join("Microsoft/WinGet/Links"), local.join("Programs/Antigravity/bin"), local.join("Programs/Antigravity")]);
+        }
     }
     // nvm installs node tools per version
     if let Ok(rd) = std::fs::read_dir(home.join(".nvm/versions/node")) {
@@ -70,7 +89,6 @@ pub fn find_program(name: &str, configured: &str) -> Option<PathBuf> {
         v.reverse();
         dirs.extend(v);
     }
-    let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), format!("{name}.cmd"), name.to_string()] } else { vec![name.to_string()] };
     dirs.into_iter().flat_map(|d| names.iter().map(move |n| d.join(n)).collect::<Vec<_>>()).find(|p| p.is_file())
 }
 
@@ -156,10 +174,17 @@ pub fn run_job(which: Which, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool
     if !cfg.enabled {
         return Err(format!("{} is switched off in Settings", which.program()));
     }
-    let prog = find_program(which.program(), &cfg.path).ok_or_else(|| format!("'{}' was not found; install it or set its path in Settings", which.program()))?;
+    let prog = find_program(which.program(), &cfg.path).ok_or_else(|| {
+        if cfg.path.trim().is_empty() {
+            format!("'{}' was not found; install it or set its path in Settings › Coding agents", which.program())
+        } else {
+            format!("'{}' was not found at {}; correct its path in Settings › Coding agents", which.program(), cfg.path.trim())
+        }
+    })?;
     let workdir = job.workdir;
     std::fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
     let mut cmd = Command::new(&prog);
+    th_mcp::hide_console(&mut cmd);
     cmd.current_dir(workdir).env("PATH", child_path(&prog)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     // a fresh session, not a child of a Claude Code session this app may run inside
     for (k, _) in std::env::vars() {
@@ -283,11 +308,26 @@ fn run_acp(prog: &Path, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool) -> 
     use std::io::{BufRead, Write};
     let t0 = Instant::now();
     let mut cmd = Command::new(prog);
+    th_mcp::hide_console(&mut cmd);
     cmd.arg("acp").arg("--add-dir").arg(job.project).args(&cfg.args);
-    cmd.current_dir(job.workdir).env("PATH", child_path(prog)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.current_dir(job.workdir).env("PATH", child_path(prog)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {} acp: {e}", prog.display()))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
+    // the last of agy's own messages, to explain an acp server that ends early
+    let errors = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    if let Some(err_pipe) = child.stderr.take() {
+        let errors = errors.clone();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(err_pipe).lines().map_while(Result::ok) {
+                let mut e = errors.lock().unwrap();
+                e.push_str(&line);
+                e.push('\n');
+                let keep = tail(&e, 2000);
+                *e = keep;
+            }
+        });
+    }
     let (tx, rx) = std::sync::mpsc::channel::<Value>();
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -332,7 +372,11 @@ fn run_acp(prog: &Path, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool) -> 
             let m = match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(m) => m,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(_) => return Err(format!("agy acp ended during {method}")),
+                Err(_) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                    let e = errors.lock().unwrap().trim().to_string();
+                    return Err(if e.is_empty() { format!("agy acp ended during {method}") } else { format!("agy acp ended during {method}: {e}") });
+                }
             };
             match (m.get("method").and_then(|x| x.as_str()), m.get("id")) {
                 (Some("session/update"), None) => {
@@ -400,4 +444,24 @@ fn run_acp(prog: &Path, cfg: &ExternalAgent, job: &Job, cancel: &AtomicBool) -> 
 fn tail(s: &str, n: usize) -> String {
     let c: Vec<char> = s.chars().collect();
     c[c.len().saturating_sub(n)..].iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_path_may_be_quoted_a_folder_or_without_extension() {
+        let dir = std::env::temp_dir().join(format!("th_find_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let file = dir.join("bin").join(if cfg!(windows) { "agy.exe" } else { "agy" });
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(find_program("agy", &format!("\"{}\"", file.display())), Some(file.clone()));
+        assert_eq!(find_program("agy", &dir.display().to_string()), Some(file.clone()));
+        if cfg!(windows) {
+            assert_eq!(find_program("agy", &dir.join("bin").join("agy").display().to_string()), Some(file.clone()));
+        }
+        assert_eq!(find_program("agy", &dir.join("nothing").display().to_string()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

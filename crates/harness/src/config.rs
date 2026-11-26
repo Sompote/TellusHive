@@ -6,7 +6,8 @@ use th_llm::Provider;
 use th_mcp::ServerConfig;
 use serde::{Deserialize, Serialize};
 
-/// Where everything global lives: `~/Library/Application Support/TellusHive` on macOS.
+/// Where everything global lives: `~/Library/Application Support/TellusHive` on macOS,
+/// `%APPDATA%\TellusHive` on Windows.
 pub fn data_dir() -> PathBuf {
     if let Ok(d) = std::env::var("TELLUSHIVE_HOME") {
         return PathBuf::from(d);
@@ -237,11 +238,47 @@ impl Default for Settings {
             python: String::new(),
             open_models: true,
             skill_dirs: vec![data_dir().join("skills").display().to_string(), home.join(".claude/skills").display().to_string()],
-            projects_dir: home.join("Documents/TellusHive").display().to_string(),
+            // the real Documents folder (on Windows often moved into OneDrive)
+            projects_dir: dirs::document_dir().unwrap_or_else(|| home.join("Documents")).join("TellusHive").display().to_string(),
             dark: false,
             harness: HarnessSettings::default(),
         }
     }
+}
+
+/// Where a program `title` (its executable `stem`.exe) may be on Windows: installed under
+/// Programs or Program Files, or unpacked from its release zip (`Pondus-0.1.5-windows-x64`) in
+/// Downloads, on the Desktop or in the home folder, also one folder deeper or in `bin`.
+fn windows_installs(title: &str, stem: &str) -> Vec<String> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let bases: Vec<PathBuf> = [
+        dirs::data_local_dir().map(|d| d.join("Programs")),
+        std::env::var_os("ProgramFiles").map(PathBuf::from),
+        dirs::download_dir(),
+        dirs::desktop_dir(),
+        Some(home),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let t = title.to_ascii_lowercase();
+    let is_ours = |n: &str| {
+        let n = n.to_ascii_lowercase();
+        n == t || [format!("{t}-"), format!("{t}_"), format!("{t} ")].iter().any(|p| n.starts_with(p.as_str()))
+    };
+    let mut dirs_: Vec<PathBuf> = vec![];
+    for b in bases {
+        let Ok(rd) = std::fs::read_dir(&b) else { continue };
+        for e in rd.flatten().filter(|e| e.path().is_dir() && is_ours(&e.file_name().to_string_lossy())) {
+            let d = e.path();
+            dirs_.push(d.join("bin"));
+            if let Ok(inner) = std::fs::read_dir(&d) {
+                dirs_.extend(inner.flatten().map(|x| x.path()).filter(|x| x.is_dir()));
+            }
+            dirs_.push(d);
+        }
+    }
+    dirs_.into_iter().map(|d| d.join(format!("{stem}.exe")).display().to_string()).collect()
 }
 
 /// Tellus (2D FE) and Tellus3D, when their programs are found on this computer.
@@ -272,7 +309,16 @@ pub fn default_plugins() -> Vec<ServerConfig> {
             vec!["/Applications/TellusLEM.app/Contents/MacOS/tellus-lem".into(), h("ENV3/slope/TellusLEM/target/release/tellus-lem"), h("ENV3/slope/TellusLEM/dist/TellusLEM.app/Contents/MacOS/tellus-lem")], 1800),
     ];
     let mut out = vec![];
-    for (name, desc, paths, timeout_s) in programs {
+    for (name, desc, mut paths, timeout_s) in programs {
+        if cfg!(windows) {
+            // the program's name as installed ("TellusLEM" from /Applications/TellusLEM.app)
+            // and its executable ("tellus-lem"), looked for where Windows keeps programs
+            let title = paths[0].trim_start_matches("/Applications/").split(".app").next().unwrap_or(name).to_string();
+            let stem = Path::new(&paths[0]).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.to_string());
+            let mut win: Vec<String> = paths.iter().filter(|p| !p.starts_with("/Applications/")).map(|p| format!("{p}.exe")).collect();
+            win.extend(windows_installs(&title, &stem));
+            paths = win;
+        }
         // the newest copy: a fresh build beats an older installed app, and the other way round
         let found = paths
             .iter()
@@ -290,7 +336,7 @@ pub fn default_plugins() -> Vec<ServerConfig> {
         });
     }
     // CADCraft (AutoCAD-like 2D CAD): shows the drawings and lets the drafter draw live
-    let cad = home.join("ENV2/cad/cadcraft/target/release/cadcraft-cli");
+    let cad = home.join(if cfg!(windows) { "ENV2/cad/cadcraft/target/release/cadcraft-cli.exe" } else { "ENV2/cad/cadcraft/target/release/cadcraft-cli" });
     out.push(ServerConfig {
         name: "cadcraft".into(),
         description: "CADCraft 2D/3D CAD (AutoCAD-like). `open` {path} opens a DXF in the CADCraft window; command_line takes AutoCAD syntax (line 0,0 10,0; circle 5,2 1; zoom e); render returns a picture; save writes DXF/PDF.".into(),

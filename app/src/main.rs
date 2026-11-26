@@ -15,6 +15,7 @@ mod bridge;
 mod chat;
 mod chrome;
 mod icons;
+mod latex;
 mod markdown;
 mod plugins;
 mod qa;

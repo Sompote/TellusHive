@@ -221,8 +221,14 @@ impl Project {
         Ok(dst)
     }
 
+    /// A path as the agents and the chat write it: relative to the project, with `/` also on
+    /// Windows (which takes both), so links and paths read the same on every system.
     pub fn rel(&self, p: &Path) -> String {
-        p.strip_prefix(&self.dir).map(|r| r.display().to_string()).unwrap_or_else(|_| p.display().to_string())
+        match p.strip_prefix(&self.dir) {
+            Ok(r) if cfg!(windows) => r.display().to_string().replace('\\', "/"),
+            Ok(r) => r.display().to_string(),
+            Err(_) => p.display().to_string(),
+        }
     }
 }
 

@@ -124,8 +124,21 @@ fn starts(ev: &[Event]) -> Vec<(String, usize)> {
     ev.iter().filter_map(|e| if let Event::AgentStart { agent, depth, .. } = e { Some((agent.clone(), *depth)) } else { None }).collect()
 }
 
-/// A stdio MCP server in a shell script: `echo` answers pong, `pwd` answers its folder.
+/// A stdio MCP server in a shell script (PowerShell on Windows): `echo` answers pong, `pwd`
+/// answers its folder.
 fn fake_plugin(name: &str) -> ServerConfig {
+    if cfg!(windows) {
+        let script = r#"
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $id = if ($line -match '"id":(\d+)') { $Matches[1] } else { '' }
+  if ($line -like '*initialize*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"serverInfo":{"name":"fake"},"capabilities":{"tools":{}}}}') }
+  elseif ($line -like '*tools/list*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"tools":[{"name":"echo","description":"e","inputSchema":{"type":"object"}},{"name":"pwd","description":"p","inputSchema":{"type":"object"}}]}}') }
+  elseif ($line -like '*"name":"pwd"*') { $p = (Get-Location).ProviderPath | ConvertTo-Json; [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"content":[{"type":"text","text":' + $p + '}]}}') }
+  elseif ($line -like '*tools/call*') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"content":[{"type":"text","text":"pong"}]}}') }
+  [Console]::Out.Flush()
+}"#;
+        return ServerConfig { name: name.into(), description: "fake program".into(), command: "powershell".into(), args: vec!["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), script.into()], enabled: true, timeout_s: 30, ..Default::default() };
+    }
     let script = r#"while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
@@ -361,7 +374,7 @@ fn c11_plugin_runs_in_the_project_folder() {
         Some(r) => Message::assistant(r.clone()),
     }));
     let a = send(&e, "where?").0.unwrap();
-    let want = p.dir.canonicalize().unwrap();
+    let want = th_harness::tools::plain_path(p.dir.canonicalize().unwrap());
     assert!(a.contains(&want.display().to_string()), "plugin ran in {a}, not {}", want.display());
 }
 
