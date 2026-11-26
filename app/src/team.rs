@@ -787,7 +787,7 @@ impl TeamView {
 
             chrome::section(ui, "Plugins");
             if settings.plugins.is_empty() {
-                chrome::hint(ui, "No plugins yet: add MCP servers in step 4.");
+                chrome::hint(ui, "No plugins yet: add MCP servers under Settings › Plugins & MCP.");
             }
             for p in &settings.plugins {
                 let mut on = a.plugins.contains(&p.name);

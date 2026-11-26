@@ -111,7 +111,7 @@ impl Ws {
             Ws::Project => "Each project is a folder with its attachments, calculations, drawings and reports. The description and notes are added to every agent's instructions: put the client, the site, the units and any office rule here.",
             Ws::Standards => "Switch on the standards this project follows. The library itself, where standards are imported and office rules added, is one pool for every project under Settings › Standards library. Agents search only the chosen standards and cite clause numbers from what they find.",
             Ws::Team => "The coordinator talks with you and delegates to the others along the arrows. Each agent has its own instructions, model, built-in tools, skills (folders with SKILL.md) and plugins. Changes are saved automatically.",
-            Ws::Plugins => "A plugin is an MCP server: a program started with arguments (stdio) or an HTTP endpoint. Equip agents with plugins in the Team layer, and a bot's own plugins in its profile. Tellus, Tellus3D and CADCraft are found automatically.",
+            Ws::Plugins => "Switch on the plugins this project's agents may use. A plugin is an MCP server, a program started with arguments (stdio) or an HTTP endpoint, and the list itself is kept for every project under Settings › Plugins & MCP, where plugins are added, connected and tested. Equip agents with plugins in the Team layer, and a bot's own plugins in its profile.",
             _ => "",
         }
     }
@@ -915,7 +915,7 @@ impl App {
         }
         if std::mem::take(&mut self.std_view.open_settings) {
             self.ws = Ws::Settings;
-            self.set_view.show_library();
+            self.set_view.show_section(crate::settings_view::LIBRARY);
         }
     }
 
@@ -954,14 +954,18 @@ impl App {
         let plugins = self.engine.plugins.clone();
         let mut changed = false;
         self.step_panel(ctx, |app, ui| {
-            changed |= app.plug_view.left(ui, &mut app.settings.plugins, &plugins);
+            changed |= app.plug_view.project_left(ui, &app.settings.plugins, &plugins, &mut app.project.info.plugins);
         });
         egui::CentralPanel::default().frame(Self::canvas_frame(ctx).inner_margin(16)).show(ctx, |ui| {
             Self::dots(ui);
-            changed |= self.plug_view.center(ui, &mut self.settings.plugins, &plugins);
+            self.plug_view.project_center(ui, &mut self.settings.plugins, &plugins);
         });
         if changed {
-            self.apply_settings();
+            self.apply_project();
+        }
+        if std::mem::take(&mut self.plug_view.open_settings) {
+            self.ws = Ws::Settings;
+            self.set_view.show_section(crate::settings_view::PLUGINS);
         }
     }
 
@@ -1160,13 +1164,20 @@ impl App {
         });
         let mut changed = false;
         let lib = self.engine.library.clone();
+        let plugins = self.engine.plugins.clone();
         let mut deleted = None;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.field).inner_margin(egui::Margin { left: 40, right: 40, top: 24, bottom: 16 })).show(ctx, |ui| {
-            let std_view = &mut self.std_view;
-            changed = self.set_view.ui(ui, &mut self.settings, &mut |ui, s| {
-                if let Some(id) = std_view.manage(ui, &lib, &s.embedder) {
-                    deleted = Some(id);
+            let (std_view, plug_view) = (&mut self.std_view, &mut self.plug_view);
+            changed = self.set_view.ui(ui, &mut self.settings, &mut |section, ui, s| match section {
+                crate::settings_view::LIBRARY => {
+                    if let Some(id) = std_view.manage(ui, &lib, &s.embedder) {
+                        deleted = Some(id);
+                    }
                 }
+                crate::settings_view::PLUGINS => {
+                    plug_view.manage(ui, &mut s.plugins, &plugins);
+                }
+                _ => {}
             });
         });
         if changed {
@@ -1227,7 +1238,8 @@ impl App {
                 self.open_template_dialog();
             }
             if rail_button(ui, Icon::Library, "Standards library", false).clicked() {
-                self.ws = Ws::Standards;
+                self.ws = Ws::Settings;
+                self.set_view.show_section(crate::settings_view::LIBRARY);
                 self.std_view.refresh();
             }
             if rail_button(ui, Icon::Redo, "Back to the project", false).clicked() {

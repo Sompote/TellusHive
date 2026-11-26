@@ -14,13 +14,18 @@ use crate::icons::{self, Icon};
 use crate::plugins::split_args;
 use crate::theme::medium_font;
 
-const SECTIONS: [(Icon, &str, &str); 5] = [
+const SECTIONS: [(Icon, &str, &str); 6] = [
     (Icon::Chat, "Models", "Which language model each agent uses, and the API keys"),
     (Icon::Library, "Standards library", "The pool of standards every project and bot chooses from: import, re-index and office rules, and how the library is searched"),
-    (Icon::Edit, "Coding agents & MCP", "Claude Code, Codex and Antigravity, and the MCP server for other agents"),
+    (Icon::Plug, "Plugins & MCP", "The connections of the design office: MCP servers and programs the agents drive, and other agents that talk to your bots"),
+    (Icon::Edit, "Coding agents", "Claude Code, Codex and Antigravity, as workers and as an agent's model"),
     (Icon::Book, "Skills", "The skills agents can be equipped with: add, write or remove them"),
     (Icon::Settings, "General", "Projects folder and appearance"),
 ];
+
+/// The sections drawn by the app (they live beside the project pages that use them).
+pub const LIBRARY: usize = 1;
+pub const PLUGINS: usize = 2;
 
 #[derive(Default)]
 pub struct SettingsView {
@@ -75,14 +80,14 @@ impl SettingsView {
         ui.label(RichText::new(format!("Saved in {}", Settings::path().display())).size(11.0).color(t.text_faint));
     }
 
-    /// Opens the Standards library section.
-    pub fn show_library(&mut self) {
-        self.section = 1;
+    /// Opens a section (`LIBRARY`, `PLUGINS`).
+    pub fn show_section(&mut self, section: usize) {
+        self.section = section;
     }
 
-    /// Returns true when the settings changed. `library` draws the standards library (it lives
-    /// in the app, beside the project page that switches standards on).
-    pub fn ui(&mut self, ui: &mut egui::Ui, s: &mut Settings, library: &mut dyn FnMut(&mut egui::Ui, &Settings)) -> bool {
+    /// Returns true when the settings changed. `app_section` draws the standards library and the
+    /// plugins, which live in the app beside the project pages that switch them on.
+    pub fn ui(&mut self, ui: &mut egui::Ui, s: &mut Settings, app_section: &mut dyn FnMut(usize, &mut egui::Ui, &mut Settings)) -> bool {
         let t = tokens(ui);
         let before = s.clone();
         if let Some(rx) = &self.models_rx {
@@ -98,12 +103,16 @@ impl SettingsView {
             ui.label(RichText::new(about).color(t.text_dim));
             match self.section {
                 0 => self.models_ui(ui, s),
-                1 => {
-                    library(ui, s);
+                LIBRARY => {
+                    app_section(LIBRARY, ui, s);
                     embed_ui(ui, s);
                 }
-                2 => self.external_ui(ui, s),
-                3 => self.skills_ui(ui, s),
+                PLUGINS => {
+                    app_section(PLUGINS, ui, s);
+                    bridge_ui(ui, s);
+                }
+                3 => self.external_ui(ui, s),
+                4 => self.skills_ui(ui, s),
                 _ => general_ui(ui, s),
             }
             ui.add_space(24.0);
@@ -266,32 +275,7 @@ impl SettingsView {
                 });
             });
         }
-        let b = &mut s.bridge;
-        group(ui, "MCP server for other agents", &b.url(), |ui| {
-            chrome::switch_row(ui, "Let other agents talk to the bots and teams while TellusHive runs", &mut b.enabled);
-            ui.horizontal(|ui| {
-                chrome::row_label(ui, "Port");
-                ui.add_sized([100.0, 28.0], egui::DragValue::new(&mut b.port).range(1024..=65535));
-            });
-            ui.horizontal(|ui| {
-                chrome::row_label(ui, "Token");
-                ui.add_sized([ui.available_width() - 110.0, 28.0], egui::TextEdit::singleline(&mut b.token).password(true).vertical_align(egui::Align::Center));
-                if ui.button("New token").on_hover_text("Clients with the old token are turned away after the restart").clicked() {
-                    b.token = th_harness::config::BridgeSettings::new_token();
-                }
-            });
-            ui.horizontal(|ui| {
-                chrome::row_label(ui, "");
-                if ui.button("Copy client config").on_hover_text("MCP configuration with the URL and the token, for Claude Code, Claude Desktop, Cursor and others").clicked() {
-                    let cfg = serde_json::json!({"mcpServers": {"tellushive": {"type": "http", "url": b.url(), "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
-                    ui.ctx().copy_text(serde_json::to_string_pretty(&cfg).unwrap_or_default());
-                }
-                if ui.button("Copy token").clicked() {
-                    ui.ctx().copy_text(b.token.clone());
-                }
-            });
-            chrome::hint(ui, "Tools offered: list_bots, list_teams, ask_bot and ask_team. A message lands in that bot's or team's chat in this window, so you see the work; the reply goes back to the agent when the run ends. The server listens on this computer only (127.0.0.1). Agents running here (Claude Code, Codex, agy, Claude Desktop) connect directly; ChatGPT and Grok run in the cloud and need a public HTTPS tunnel to this port. Changes apply when TellusHive restarts.");
-        });
+
     }
 }
 
@@ -490,4 +474,35 @@ fn general_ui(ui: &mut egui::Ui, s: &mut Settings) {
     group(ui, "Appearance", "", |ui| {
         chrome::switch_row(ui, "Dark theme", &mut s.dark);
     });
+}
+
+/// The MCP server of this window: other agents (Claude Code, Codex, agy, Claude Desktop,
+/// ChatGPT or Grok through a tunnel) talk to the bots and teams through it.
+fn bridge_ui(ui: &mut egui::Ui, s: &mut Settings) {
+        let b = &mut s.bridge;
+        group(ui, "Other agents connect here", &format!("MCP server · {}", b.url()), |ui| {
+            chrome::switch_row(ui, "Let other agents talk to the bots and teams while TellusHive runs", &mut b.enabled);
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "Port");
+                ui.add_sized([100.0, 28.0], egui::DragValue::new(&mut b.port).range(1024..=65535));
+            });
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "Token");
+                ui.add_sized([ui.available_width() - 110.0, 28.0], egui::TextEdit::singleline(&mut b.token).password(true).vertical_align(egui::Align::Center));
+                if ui.button("New token").on_hover_text("Clients with the old token are turned away after the restart").clicked() {
+                    b.token = th_harness::config::BridgeSettings::new_token();
+                }
+            });
+            ui.horizontal(|ui| {
+                chrome::row_label(ui, "");
+                if ui.button("Copy client config").on_hover_text("MCP configuration with the URL and the token, for Claude Code, Claude Desktop, Cursor and others").clicked() {
+                    let cfg = serde_json::json!({"mcpServers": {"tellushive": {"type": "http", "url": b.url(), "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
+                    ui.ctx().copy_text(serde_json::to_string_pretty(&cfg).unwrap_or_default());
+                }
+                if ui.button("Copy token").clicked() {
+                    ui.ctx().copy_text(b.token.clone());
+                }
+            });
+            chrome::hint(ui, "Tools offered: list_bots, list_teams, ask_bot and ask_team. A message lands in that bot's or team's chat in this window, so you see the work; the reply goes back to the agent when the run ends. The server listens on this computer only (127.0.0.1). Agents running here (Claude Code, Codex, agy, Claude Desktop) connect directly; ChatGPT and Grok run in the cloud and need a public HTTPS tunnel to this port. Changes apply when TellusHive restarts.");
+        });
 }

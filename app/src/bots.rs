@@ -1012,7 +1012,7 @@ impl BotsView {
             let used = if all_on { enabled.len() } else { enabled.iter().filter(|(n, _)| b.plugins.contains(n)).count() };
             egui::CollapsingHeader::new(RichText::new(format!("Plugins · {used} of {}", enabled.len())).font(medium_font(13.0))).id_salt("bot_plug").show(ui, |ui| {
                 if enabled.is_empty() {
-                    chrome::hint(ui, "No plugins switched on: add MCP programs under Project › Plugins.");
+                    chrome::hint(ui, "No plugins switched on: add MCP programs under Settings › Plugins & MCP.");
                 } else {
                     chrome::hint(ui, "The programs this bot drives itself. Each one starts when the bot runs, so switch on only those it needs; the teams it calls use their own.");
                 }
