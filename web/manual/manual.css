@@ -1,0 +1,41 @@
+/* The user manual: a contents rail beside one long, readable column. Tokens come from ../styles.css. */
+.man { display: grid; gap: var(--s-6); padding: var(--s-6) var(--gutter) var(--s-9); max-width: 1240px; margin: 0 auto; }
+.man__toc { display: none; }
+.man__body { min-width: 0; max-width: 72ch; font-size: 1.0625rem; line-height: 1.65; }
+.man__body, .man__toc { font-family: var(--f-sans), "Noto Sans Thai", sans-serif; }
+.man__title { font: 500 var(--t-2xl)/1.02 var(--f-sans); letter-spacing: -0.035em; margin: 0 0 var(--s-5); }
+.man__body p, .man__body ul, .man__body ol { margin: 0 0 var(--s-4); }
+.man__body li { margin-bottom: var(--s-2); }
+.man__body strong { font-weight: 600; }
+.man__body a:not(.btn) { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+.man__body a:not(.btn):hover { color: var(--c-accent-hover); }
+.ch { border-top: var(--hair) solid var(--c-rule); margin-top: var(--s-8); padding-top: var(--s-6); }
+.ch-title { font: 500 var(--t-xl)/1.1 var(--f-sans); letter-spacing: -0.02em; margin: 0 0 var(--s-5); scroll-margin-top: 72px; }
+.man__body h3 { font: 600 var(--t-lg)/1.25 var(--f-sans); margin: var(--s-6) 0 var(--s-3); scroll-margin-top: 72px; }
+.man__body code { font-family: var(--f-mono), "Noto Sans Thai", monospace; font-size: .86em; background: var(--c-paper-2); border: var(--hair) solid var(--c-rule); padding: 0 .3em; border-radius: 3px; overflow-wrap: anywhere; }
+.man__body pre { background: var(--c-paper-2); border: var(--hair) solid var(--c-rule); border-radius: 4px; padding: var(--s-3) var(--s-4); overflow-x: auto; margin: 0 0 var(--s-4); }
+.man__body pre code { background: none; border: 0; padding: 0; font-size: .82rem; line-height: 1.5; overflow-wrap: normal; }
+.man__body figure { margin: var(--s-5) 0; }
+.man__body figure img { width: 100%; height: auto; border: var(--hair) solid var(--c-rule); border-radius: 4px; background: #fff; box-shadow: 0 10px 28px -18px rgba(0, 0, 0, .35); }
+.man__body figcaption { font: 400 var(--t-xs)/1.5 var(--f-mono); color: var(--c-ink-2); margin-top: var(--s-2); }
+.tbl { overflow-x: auto; margin: 0 0 var(--s-5); }
+.man__body table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+.man__body th, .man__body td { text-align: left; vertical-align: top; padding: var(--s-2) var(--s-3); border-bottom: var(--hair) solid var(--c-rule); }
+.man__body th { font-weight: 600; background: var(--c-paper-2); }
+.man__pdf { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); margin: var(--s-5) 0; }
+.man__note { margin: var(--s-5) 0; padding: var(--s-4); background: var(--c-accent-soft); border-left: 3px solid var(--c-accent); border-radius: 2px; font-size: .95rem; }
+.man__mtoc { margin: var(--s-5) 0; border: var(--hair) solid var(--c-rule); border-radius: 4px; padding: var(--s-3) var(--s-4); }
+.man__mtoc summary { cursor: pointer; font-weight: 600; }
+.man__mtoc ol ol, .man__toc ol ol { display: none; }
+.man__end { margin-top: var(--s-8); color: var(--c-ink-2); }
+.man__toc ol { list-style: none; margin: 0; padding: 0; }
+.man__toc > ol > li { margin: 0 0 var(--s-2); }
+.man__toc a { color: var(--c-ink-2); text-decoration: none; font-size: var(--t-sm); line-height: 1.35; display: block; padding: 2px 0; }
+.man__toc a:hover, .man__toc a:focus-visible { color: var(--c-accent); }
+.man__toc ol ol a { font-size: var(--t-xs); padding-left: var(--s-3); color: var(--c-ink-3); }
+@media (min-width: 1000px) {
+  .man { grid-template-columns: 250px minmax(0, 1fr); gap: var(--s-8); }
+  .man__toc { display: block; position: sticky; top: 72px; align-self: start; max-height: calc(100vh - 96px); overflow-y: auto; padding-right: var(--s-3); }
+  .man__toc ol ol { display: block; margin: var(--s-1) 0 var(--s-3); }
+  .man__mtoc { display: none; }
+}
