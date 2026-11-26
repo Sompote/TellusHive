@@ -18,12 +18,12 @@ Documentation: [user manual](manual/README.md) · [architecture](docs/architectu
 
 ## Download
 
-Version 0.2.1 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.2.1):
+Version 0.2.2 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.2.2):
 
 | System | Download | What it is |
 |---|---|---|
-| Windows 10 or 11, 64-bit | [TellusHive-0.2.1-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.1/TellusHive-0.2.1-windows-x64.zip) | `tellushive.exe`, no installer needed |
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.0-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-macos-universal.zip) | `TellusHive.app`, one universal program (0.2.0; the 0.2.1 Mac build follows) |
+| Windows 10 or 11, 64-bit | [TellusHive-0.2.2-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.2/TellusHive-0.2.2-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.0-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-macos-universal.zip) | `TellusHive.app`, one universal program (0.2.0; the 0.2.2 Mac build follows) |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -31,6 +31,17 @@ macOS, unzip the file, move `TellusHive.app` to Applications, then right-click i
 unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More info → Run
 anyway**. From 0.2.1 the Windows build is made and tested on Windows, and it needs no Visual C++
 runtime.
+
+### What is new in 0.2.2
+
+A fix release for Windows, found by running every tool of the agents on Windows in a project
+folder with Thai, spaces and `&` in its path. A file name that Windows cannot store is now refused
+with the reason, so the agent picks another one: a `:` in a name had written the content into a
+hidden part of an empty file while the agent was told the file was saved, and names such as `CON`
+or a name ending in a dot failed with an unclear error. The output of the agents' Python scripts
+no longer carries Windows' `\r` line endings and names the script with `/`, the chat's own log is
+no longer listed as a file the script wrote, and a Windows line break in a report's text no
+longer shows as a box in the PDF.
 
 ### What is new in 0.2.1
 
@@ -222,7 +233,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 156 tests, no API key needed
+cargo test --workspace     # 157 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step

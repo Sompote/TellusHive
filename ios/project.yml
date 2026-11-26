@@ -7,7 +7,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.2.1"
+    MARKETING_VERSION: "0.2.2"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: ""   # your Apple team ID (Xcode › Signing & Capabilities fills it in)
 targets:
