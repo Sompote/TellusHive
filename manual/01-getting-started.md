@@ -4,7 +4,7 @@ This chapter takes you from the download to a first answer from a bot. It covers
 
 ## Install TellusHive
 
-Download the file for your computer from the [release page](https://github.com/Sompote/TellusHive/releases/latest). The macOS download is `TellusHive-0.1.9-macos-universal.zip`, which runs on both Apple silicon and Intel Macs with macOS 11 or newer, and the Windows download is `TellusHive-0.1.9-windows-x64.zip` for 64-bit Windows 10 or 11. Neither program is signed by Apple or Microsoft, so the first start needs one extra step.
+Download the file for your computer from the [release page](https://github.com/Sompote/TellusHive/releases/latest). The macOS download is `TellusHive-0.2.0-macos-universal.zip`, which runs on both Apple silicon and Intel Macs with macOS 11 or newer, and the Windows download is `TellusHive-0.2.0-windows-x64.zip` for 64-bit Windows 10 or 11. Neither program is signed by Apple or Microsoft, so the first start needs one extra step.
 
 On macOS, unzip the file and move `TellusHive.app` to the Applications folder. Right-click the app and choose **Open** the first time, because a double-click on an unsigned app only shows a warning. If macOS still refuses, run `xattr -dr com.apple.quarantine /Applications/TellusHive.app` once in Terminal. On Windows, unzip the folder and start `tellushive.exe`, and if SmartScreen warns, choose **More info** and then **Run anyway**. The Windows build is made on a Mac and has not yet been tested on many Windows computers, so please report what you find.
 

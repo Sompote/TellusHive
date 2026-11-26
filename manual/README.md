@@ -1,6 +1,6 @@
 # TellusHive user manual
 
-This manual explains how to use TellusHive 0.1.9, the open-source design office of AI agents for civil engineers. It walks through the window from the first start to a checked design, and it gives the details of every setting, so you can read it from the beginning or jump to the chapter you need. The screenshots come from the program itself, and the names of buttons and fields are written in **bold** exactly as they appear on screen.
+This manual explains how to use TellusHive 0.2.0, the open-source design office of AI agents for civil engineers. It walks through the window from the first start to a checked design, and it gives the details of every setting, so you can read it from the beginning or jump to the chapter you need. The screenshots come from the program itself, and the names of buttons and fields are written in **bold** exactly as they appear on screen.
 
 ![The Bots workspace, with four bots in the rail and a chat with the bot Arun](images/bots-chat.webp)
 

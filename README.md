@@ -18,12 +18,12 @@ Documentation: [user manual](manual/README.md) · [architecture](docs/architectu
 
 ## Download
 
-Version 0.1.9 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.1.9):
+Version 0.2.0 (developer preview), from the [release page](https://github.com/Sompote/TellusHive/releases/tag/v0.2.0):
 
 | System | Download | What it is |
 |---|---|---|
-| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.1.9-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.9/TellusHive-0.1.9-macos-universal.zip) | `TellusHive.app`, one universal program |
-| Windows 10 or 11, 64-bit | [TellusHive-0.1.9-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.1.9/TellusHive-0.1.9-windows-x64.zip) | `tellushive.exe`, no installer needed |
+| macOS 11 or newer, Apple silicon and Intel | [TellusHive-0.2.0-macos-universal.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-macos-universal.zip) | `TellusHive.app`, one universal program |
+| Windows 10 or 11, 64-bit | [TellusHive-0.2.0-windows-x64.zip](https://github.com/Sompote/TellusHive/releases/download/v0.2.0/TellusHive-0.2.0-windows-x64.zip) | `tellushive.exe`, no installer needed |
 
 The programs are not signed by Apple or Microsoft, so the first start needs one extra step. On
 macOS, unzip the file, move `TellusHive.app` to Applications, then right-click it and choose
@@ -32,9 +32,26 @@ unzip the folder and start `tellushive.exe`; if SmartScreen warns, choose **More
 anyway**. The Windows build is cross-compiled on macOS and has not yet been tested on a Windows
 computer, so please report what you find.
 
-### What is new in 0.1.9
+### What is new in 0.2.0
 
-The window now opens on **Bots**, a messenger-style workspace where the engineer talks to a
+All the connections of the design office are now managed in one place, **Settings › Plugins &
+MCP**. MCP servers are added there as a program, as an HTTP endpoint, or by pasting JSON in the
+format Claude uses, the `mcpServers` block of Claude Desktop, Claude Code and Cursor, so a server
+set up for Claude works in TellusHive without retyping it. One paste can add several servers,
+mistakes are explained before anything is added, and **Copy as JSON** writes plugins back in the
+same format. Each plugin can be connected and tested there, with its tools and its server log, and
+the MCP server through which other agents talk to your bots now sits on the same page. A project
+only chooses which of these plugins its agents may use, under **Project › Plugins**, which until
+now edited the shared list of every project.
+
+Links in the chat now open, because the chat's Markdown renderer did not draw links before. A link
+to a file of the project, such as a report the agents wrote, opens it in your default app or the
+viewer, a web link opens in the browser, and a link that points outside the project folder or at a
+program or script is refused with the reason. TellusHive also has a [user manual](manual/README.md)
+of ten chapters with screenshots, which is a 35-page PDF too and is published on the
+[website](https://tellushive.github.io/manual/).
+
+From 0.1.9, the window opens on **Bots**, a messenger-style workspace where the engineer talks to a
 project-manager bot the way one would message a colleague, while the teams and projects sit one
 layer below. Each bot has its own name, picture, character, reply language, model and
 conversation, and it either works alone or calls saved teams, through their coordinator, and
@@ -189,7 +206,7 @@ Start with the [architecture documentation](docs/architecture.md), which maps ea
 pipeline and the session log.
 
 ```sh
-cargo test --workspace     # 145 tests, no API key needed
+cargo test --workspace     # 148 tests, no API key needed
 ```
 
 The harness tests replace the model provider with a scripted adapter, so they cover the step
