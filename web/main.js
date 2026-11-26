@@ -103,6 +103,24 @@
     io.observe(count);
   }
 
+  // ---- the video: swap the thumbnail for YouTube's player on the first click ----
+  document.querySelectorAll(".yt").forEach((a) => {
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const f = document.createElement("iframe");
+      f.src = `https://www.youtube-nocookie.com/embed/${a.dataset.yt}?autoplay=1&rel=0`;
+      f.title = a.dataset.title;
+      f.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+      f.referrerPolicy = "strict-origin-when-cross-origin";
+      f.allowFullscreen = true;
+      const box = document.createElement("div");
+      box.className = "yt";
+      box.appendChild(f);
+      a.replaceWith(box);
+      f.focus();
+    }, { once: true });
+  });
+
   // ---- copy a checksum ----
   document.querySelectorAll(".copy").forEach((btn) => {
     const label = btn.textContent;
