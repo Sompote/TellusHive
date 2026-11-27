@@ -32,6 +32,8 @@ Each project is its own folder, under `~/Documents/TellusHive` by default ([chap
 
 **A run takes too long.** Turn thinking off for routine agents, give each agent only the tools and plugins it uses, set a **Time limit** per agent in **Team**, and check the limits under **Settings › General**. A bot that works alone answers small questions much faster than a whole team.
 
+**An agent cannot save a file on Windows.** Windows cannot store a file name that contains `< > : " | ? *`, that is a device name such as `CON` or `NUL`, or that ends in a dot or a space, so TellusHive refuses such a name with the reason and the agent picks another one. Ask the agent to rename the file if it keeps trying.
+
 **A link in the chat does not open.** The chat opens only files inside the project folder that exist, and it never opens programs or scripts. The message above the message box says why a link was refused, and you can always open the file from the project folder with **Show in Finder**.
 
 **New conversation is greyed out.** The bot is still working. Stop the task with **Stop** in the top bar, then start the new conversation.

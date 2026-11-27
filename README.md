@@ -75,7 +75,7 @@ Links in the chat now open, because the chat's Markdown renderer did not draw li
 to a file of the project, such as a report the agents wrote, opens it in your default app or the
 viewer, a web link opens in the browser, and a link that points outside the project folder or at a
 program or script is refused with the reason. TellusHive also has a [user manual](manual/README.md)
-of ten chapters with screenshots, which is a 35-page PDF too and is published on the
+of ten chapters with screenshots, which is a 36-page PDF too and is published on the
 [website](https://tellushive.github.io/manual/).
 
 From 0.1.9, the window opens on **Bots**, a messenger-style workspace where the engineer talks to a
