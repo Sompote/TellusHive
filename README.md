@@ -14,10 +14,17 @@ TellusHive builds on [Cordis](https://github.com/cordiverse/cordis), whose desig
 model adapter, the tool registry, the session log and the agent loop are all plugins on one
 shared context, and the engineering side of TellusHive is one more bundle of plugins on top.
 
-Demo: a [70-second video](web/assets/demo/tellushive-demo.mp4) of one design job, from the brief to the
-report, also on the [website](https://tellushive.github.io/#demo).
-
 Documentation: [user manual](manual/README.md) · [architecture](docs/architecture.md) · [user guide](docs/guide.md)
+
+## Demo
+
+<p align="center"><a href="https://tellushive.github.io/#demo"><img src="docs/demo-thumbnail.jpg" width="720" alt="Play the 70-second TellusHive demo"></a></p>
+
+The 70-second demo follows one design job from the brief to the signed report: the coordinator
+splits the brief, the agents pull the clauses, drive the FE program through MCP and trace every
+number, and the engineer checks the result. Click the picture to play it on the website, or
+[download the MP4](https://github.com/Sompote/TellusHive/raw/main/web/assets/demo/tellushive-demo.mp4)
+(1080p, 27 MB).
 
 ## Download
 
